@@ -6,7 +6,13 @@
 //!   rmd [--device VID:PID] info
 //!                     — same as above
 //!   rmd [--device VID:PID] upload <file> [--format sp|lp2|lp105|lp4] [--title T]
-//!                     — encode (if needed) and write a track to the device
+//!                     — encode (if needed) and write a track to the device;
+//!                       the title is read from the file's metadata tags when
+//!                       --title is omitted, falling back to the filename stem
+//!   rmd [--device VID:PID] upload --folder <dir> [--format sp|lp2|lp105|lp4]
+//!                     — upload every file in a directory (top-level only);
+//!                       each track's title is read from its metadata tags,
+//!                       falling back to the filename stem
 //!   rmd [--device VID:PID] erase [<track> | disc]
 //!                     — erase a single track (1-based, as shown by `info`),
 //!                       or the whole disc when given `disc` or no argument
@@ -35,9 +41,12 @@ use std::process::Command;
 
 use anyhow::{bail, Context};
 use log::info;
+use lofty::prelude::*;
+use lofty::read_from_path;
 use netmd::track::MdTrack;
 use netmd::wav;
 use netmd::Wireformat;
+use rusb::UsbContext;
 
 fn main() -> anyhow::Result<()> {
     let args = parse_global_args(std::env::args().skip(1))?;
@@ -66,6 +75,7 @@ fn main() -> anyhow::Result<()> {
             bail!(
                 "unknown command {other:?}. usage: rmd [--device VID:PID] [info | \
                  upload <file> [--format F] [--title T] | \
+                 upload --folder <dir> [--format F] | \
                  erase [<track> | disc] | \
                  rename <track | disc> <title> [--full] | \
                  move <from> <to> | \
@@ -340,13 +350,15 @@ fn cmd_status(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
 }
 
 struct UploadArgs {
-    file: String,
+    file: Option<String>,
+    folder: Option<String>,
     format: String,
     title: Option<String>,
 }
 
 fn parse_upload_args(args: &[String]) -> anyhow::Result<UploadArgs> {
     let mut file: Option<String> = None;
+    let mut folder: Option<String> = None;
     let mut format = "sp".to_string();
     let mut title: Option<String> = None;
 
@@ -361,6 +373,17 @@ fn parse_upload_args(args: &[String]) -> anyhow::Result<UploadArgs> {
                 i += 1;
                 title = Some(args.get(i).context("--title requires a value")?.clone());
             }
+            "--folder" | "-F" => {
+                i += 1;
+                if folder.is_some() {
+                    bail!("--folder specified more than once");
+                }
+                folder = Some(
+                    args.get(i)
+                        .context("--folder requires a directory path")?
+                        .clone(),
+                );
+            }
             other if !other.starts_with('-') => {
                 if file.is_none() {
                     file = Some(other.to_string());
@@ -373,26 +396,66 @@ fn parse_upload_args(args: &[String]) -> anyhow::Result<UploadArgs> {
         i += 1;
     }
 
+    if file.is_some() && folder.is_some() {
+        bail!("--folder and a positional file argument are mutually exclusive");
+    }
+    if file.is_none() && folder.is_none() {
+        bail!("upload requires an input file, or --folder for a directory");
+    }
+    if folder.is_some() && title.is_some() {
+        bail!("--title cannot be used with --folder (use per-file metadata instead)");
+    }
+
     Ok(UploadArgs {
-        file: file.context("upload requires an input file")?,
+        file,
+        folder,
         format,
         title,
     })
 }
 
-fn cmd_upload(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let args = parse_upload_args(args)?;
-    let requested = args.format.to_lowercase();
+fn resolve_title(file: &str) -> String {
+    let tag_title = (|| -> Option<String> {
+        let tagged_file = read_from_path(file).ok()?;
+        let tag = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag())?;
+        let title = tag.title()?;
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })();
 
-    let default_title = Path::new(&args.file)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("track")
-        .to_string();
-    let title = args.title.unwrap_or(default_title);
+    match tag_title {
+        Some(title) => {
+            info!("title from metadata: {title:?} ({file})");
+            title
+        }
+        None => {
+            let fallback = Path::new(file)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("track")
+                .to_string();
+            info!("title from filename: {fallback:?} ({file})");
+            fallback
+        }
+    }
+}
 
-    info!("preparing {:?} as {}", args.file, requested);
-    let (wireformat, data) = prepare_audio(&args.file, &requested)?;
+fn upload_one<T: UsbContext>(
+    handle: &rusb::DeviceHandle<T>,
+    vendor: u16,
+    product: u16,
+    file: &str,
+    requested: &str,
+    title: &str,
+) -> anyhow::Result<()> {
+    info!("preparing {file:?} as {}", requested);
+    let (wireformat, data) = prepare_audio(file, requested)?;
     info!(
         "prepared {} bytes, wire format {:?}",
         data.len(),
@@ -400,14 +463,11 @@ fn cmd_upload(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow:
     );
 
     let track = MdTrack {
-        title: title.clone(),
+        title: title.to_string(),
         full_width_title: None,
         format: wireformat,
         data,
     };
-
-    let handle = netmd::open_device_matching(device)?;
-    let (vendor, product) = netmd::device_ids(&handle)?;
 
     let mut last_pct = u64::MAX;
     let mut progress = |written: u64, total: u64| {
@@ -419,12 +479,93 @@ fn cmd_upload(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow:
     };
 
     let (track_num, uuid, ccid) =
-        netmd::track::download_track(&handle, &track, vendor, product, Some(&mut progress))?;
+        netmd::track::download_track(handle, &track, vendor, product, Some(&mut progress))?;
 
     info!("uploaded track #{track_num} (uuid={uuid} ccid={ccid}) title={title:?}");
+    Ok(())
+}
+
+fn upload_folder<T: UsbContext>(
+    handle: &rusb::DeviceHandle<T>,
+    vendor: u16,
+    product: u16,
+    folder: &str,
+    requested: &str,
+) -> anyhow::Result<()> {
+    let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
+        .with_context(|| format!("reading directory {folder:?}"))?
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let ft = e.file_type().ok()?;
+            if ft.is_file() {
+                Some(e.path())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if paths.is_empty() {
+        bail!("no files found in {folder:?}");
+    }
+
+    paths.sort();
+
+    let mut succeeded: Vec<String> = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+
+    for path in &paths {
+        let file = path.to_string_lossy();
+        let title = resolve_title(&file);
+        info!("uploading {file:?} as {title:?}");
+        match upload_one(handle, vendor, product, &file, requested, &title) {
+            Ok(()) => succeeded.push(file.into_owned()),
+            Err(e) => {
+                let err = format!("{e:#}");
+                info!("FAILED {file:?}: {err}");
+                failed.push((file.into_owned(), err));
+            }
+        }
+    }
+
+    info!("--- folder upload summary ---");
+    info!("succeeded: {} track(s)", succeeded.len());
+    info!("failed:    {} track(s)", failed.len());
+    if !failed.is_empty() {
+        info!("failures:");
+        for (file, err) in &failed {
+            info!("  {file}: {err}");
+        }
+    }
+
+    if succeeded.is_empty() && !paths.is_empty() {
+        bail!("all {} file(s) failed to upload", paths.len());
+    }
+
+    Ok(())
+}
+
+fn cmd_upload(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let args = parse_upload_args(args)?;
+    let requested = args.format.to_lowercase();
+
+    let handle = netmd::open_device_matching(device)?;
+    let (vendor, product) = netmd::device_ids(&handle)?;
+
+    let result = if let Some(file) = &args.file {
+        let title = match &args.title {
+            Some(t) => t.clone(),
+            None => resolve_title(file),
+        };
+        upload_one(&handle, vendor, product, file, &requested, &title)
+    } else if let Some(folder) = &args.folder {
+        upload_folder(&handle, vendor, product, folder, &requested)
+    } else {
+        unreachable!()
+    };
 
     netmd::close_device(&handle)?;
-    Ok(())
+    result
 }
 
 /// Prepares audio for upload, returning the wire format and raw payload.
