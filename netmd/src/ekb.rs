@@ -1,9 +1,11 @@
 //! EKB (Encrypted Key Block) data for the secure download pipeline.
 //!
-//! Ported from `netmd-js/src/netmd-ekb.ts`. Only `EKBOpenSource` is ported — it
-//! matches every device (`doesEKBMatchDevice` always returns true) and is what
-//! the MZ-N505 uses. The deck-specific `CorruptedDeckEKB` is not ported (it only
-//! applies to MDS-JB980 / JE780 / NT1 decks with a corrupted leaf ID).
+//! Ported from `netmd-js/src/netmd-ekb.ts`. The open-source EKB matches most
+//! devices; the deck-specific `CorruptedDeckEKB` applies to MDS-JB980 / JE780 /
+//! NT1 decks with a corrupted all-`0xff` leaf ID.
+
+const SONY_VENDOR_ID: u16 = 0x054c;
+const CORRUPTED_DECK_PRODUCT_ID: u16 = 0x0081;
 
 /// Data needed to perform the key exchange with a device.
 pub struct Ekb {
@@ -21,9 +23,7 @@ pub struct Ekb {
 
 /// Returns the open-source EKB. Mirrors `EKBOpenSource` (`netmd-ekb.ts:11`).
 ///
-/// `getEKBForDevice` in the JS reference selects between this and the deck EKB;
-/// since the deck EKB is not ported and the open-source one matches all devices,
-/// this is the only selection needed for the supported hardware.
+/// `getEKBForDevice` in the JS reference selects this as the catch-all fallback.
 pub fn open_source_ekb() -> Ekb {
     Ekb {
         root_key: [
@@ -49,8 +49,70 @@ pub fn open_source_ekb() -> Ekb {
     }
 }
 
-/// Selects the appropriate EKB for the device. Currently always the open-source
-/// EKB. Mirrors `getEKBForDevice` (`netmd-ekb.ts:83`) minus the deck branch.
-pub fn get_ekb_for_device(_leaf_id: &[u8], _vendor: u16, _product: u16) -> Ekb {
-    open_source_ekb()
+/// Returns the corrupted-deck EKB. Mirrors `CorruptedDeckEKB` (`netmd-ekb.ts`).
+pub fn corrupted_deck_ekb() -> Ekb {
+    Ekb {
+        root_key: [
+            0x57, 0x4d, 0x44, 0x50, 0x57, 0x4d, 0x44, 0x50, 0x4d, 0x69, 0x6e, 0x69, 0x44, 0x69,
+            0x73, 0x63,
+        ],
+        ekb_id: 0x1337_1337,
+        key_chain: vec![[
+            0xb1, 0xd4, 0xaf, 0xfa, 0x80, 0xa0, 0xc9, 0x03, 0xc2, 0x58, 0x4b, 0x1b, 0x44, 0xaf,
+            0xc4, 0xa6,
+        ]],
+        depth: 9,
+        signature: [
+            0x6c, 0x2b, 0xc2, 0x8c, 0x45, 0x2b, 0x54, 0xf1, 0xc3, 0x59, 0x72, 0x3b, 0xe3, 0x19,
+            0x1f, 0x55, 0x17, 0x25, 0x64, 0x0e, 0x65, 0x8c, 0x81, 0x0b,
+        ],
+    }
+}
+
+fn is_corrupted_deck_ekb_match(leaf_id: &[u8], vendor: u16, product: u16) -> bool {
+    !leaf_id.is_empty()
+        && leaf_id.iter().all(|byte| *byte == 0xff)
+        && vendor == SONY_VENDOR_ID
+        && product == CORRUPTED_DECK_PRODUCT_ID
+}
+
+/// Selects the appropriate EKB for the device. Mirrors `getEKBForDevice`
+/// (`netmd-ekb.ts`) by checking the deck-specific EKB before the catch-all
+/// open-source EKB.
+pub fn get_ekb_for_device(leaf_id: &[u8], vendor: u16, product: u16) -> Ekb {
+    if is_corrupted_deck_ekb_match(leaf_id, vendor, product) {
+        corrupted_deck_ekb()
+    } else {
+        open_source_ekb()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_corrupted_deck_ekb_for_sony_0081_with_ff_leaf_id() {
+        let ekb = get_ekb_for_device(&[0xff; 8], SONY_VENDOR_ID, CORRUPTED_DECK_PRODUCT_ID);
+
+        assert_eq!(ekb.ekb_id, 0x1337_1337);
+        assert_eq!(ekb.root_key, *b"WMDPWMDPMiniDisc");
+        assert_eq!(ekb.key_chain.len(), 1);
+        assert_eq!(ekb.depth, 9);
+    }
+
+    #[test]
+    fn falls_back_to_open_source_ekb_for_normal_leaf_id() {
+        let ekb = get_ekb_for_device(&[0x01, 0x02, 0x03], SONY_VENDOR_ID, CORRUPTED_DECK_PRODUCT_ID);
+
+        assert_eq!(ekb.ekb_id, 0x2642_2642);
+        assert_eq!(ekb.key_chain.len(), 2);
+    }
+
+    #[test]
+    fn falls_back_to_open_source_ekb_for_other_devices_with_ff_leaf_id() {
+        let ekb = get_ekb_for_device(&[0xff; 8], SONY_VENDOR_ID, 0x0084);
+
+        assert_eq!(ekb.ekb_id, 0x2642_2642);
+    }
 }
