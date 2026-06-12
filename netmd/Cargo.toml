@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = { workspace = true }
-encoding_rs = { workspace = true }
-log = { workspace = true }
-rusb = { workspace = true }
-unicode-normalization = { workspace = true }
-des = { workspace = true }
-cbc = { workspace = true }
-ecb = { workspace = true }
-cipher = { workspace = true }
-rand = { workspace = true }
+anyhow = "1.0.102"
+encoding_rs = "0.8.35"
+log = "0.4.32"
+rusb = "0.9.4"
+unicode-normalization = "0.1.25"
+des = "0.8.1"
+cbc = "0.1.2"
+ecb = "0.1.2"
+cipher = "0.4.4"
+rand = "0.10.1"

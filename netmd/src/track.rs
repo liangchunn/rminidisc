@@ -113,8 +113,8 @@ pub fn download_track<T: UsbContext>(
 
     let mut host_nonce = [0u8; 8];
     {
-        use rand::RngCore;
-        rand::thread_rng().fill_bytes(&mut host_nonce);
+        use rand::Rng;
+        rand::rng().fill_bytes(&mut host_nonce);
     }
     let dev_nonce = session_key_exchange(handle, &host_nonce)?;
     let mut nonce = [0u8; 16];

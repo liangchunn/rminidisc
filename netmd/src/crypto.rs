@@ -133,11 +133,11 @@ pub struct EncryptedPacket {
 ///   with `rawKey`, chaining the IV from the previous ciphertext's last block.
 /// - `data` is padded to a multiple of `frame_size` with zeros first.
 pub fn encrypt_packets(kek: &[u8; 8], frame_size: usize, data: &[u8]) -> Vec<EncryptedPacket> {
-    use rand::RngCore;
+    use rand::Rng;
 
     trace!("encrypt_packets: frame_size={} data_len={}", frame_size, data.len());
     let mut raw_key = [0u8; 8];
-    rand::thread_rng().fill_bytes(&mut raw_key);
+    rand::rng().fill_bytes(&mut raw_key);
 
     // key = DES-ECB-decrypt(rawKey, KEK), first 8 bytes.
     let key_dec = des_ecb_decrypt(kek, &raw_key);
