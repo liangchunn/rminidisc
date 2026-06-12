@@ -101,12 +101,66 @@ pub enum DiscFlag {
     WriteProtected = 0x40,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiscFlags {
+    raw: u8,
+}
+
+impl DiscFlags {
+    pub const fn from_bits(raw: u8) -> Self {
+        Self { raw }
+    }
+
+    pub const fn raw(self) -> u8 {
+        self.raw
+    }
+
+    pub const fn contains(self, flag: DiscFlag) -> bool {
+        self.raw & flag as u8 != 0
+    }
+
+    pub const fn is_write_protected(self) -> bool {
+        self.contains(DiscFlag::WriteProtected)
+    }
+
+    pub const fn is_writable(self) -> bool {
+        self.contains(DiscFlag::Writable) && !self.is_write_protected()
+    }
+
+    pub const fn unknown_bits(self) -> u8 {
+        self.raw & !(DiscFlag::Writable as u8 | DiscFlag::WriteProtected as u8)
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetMDLevel {
     Level1 = 0x20,
     Level2 = 0x50,
     Level3 = 0x70,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FullOperatingStatus {
+    pub mode: u8,
+    pub status: OperatingStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatingStatus {
+    Ready,
+    BlankDisc,
+    Unknown(u16),
+}
+
+impl OperatingStatus {
+    pub const fn raw(self) -> u16 {
+        match self {
+            OperatingStatus::Ready => 0xc5ff,
+            OperatingStatus::BlankDisc => 0xffff,
+            OperatingStatus::Unknown(value) => value,
+        }
+    }
 }
 
 pub const FRAME_SIZE: &[(Wireformat, usize)] = &[
@@ -118,6 +172,12 @@ pub const FRAME_SIZE: &[(Wireformat, usize)] = &[
 
 pub struct ReadRequestHeader(pub [u8; 4]);
 
+impl Default for ReadRequestHeader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReadRequestHeader {
     pub fn new() -> Self {
         ReadRequestHeader([0; 4])
@@ -125,6 +185,10 @@ impl ReadRequestHeader {
 
     pub fn len(&self) -> usize {
         self.0[2] as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 

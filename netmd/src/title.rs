@@ -47,7 +47,7 @@ pub fn sanitize_half_width_title(title: &str) -> String {
             }
 
             let without_diacritics = remove_diacritics(c);
-            if !without_diacritics.is_empty() && without_diacritics.chars().all(|c| c.is_ascii()) {
+            if !without_diacritics.is_empty() && without_diacritics.is_ascii() {
                 without_diacritics
             } else {
                 " ".to_string()

@@ -88,6 +88,22 @@ impl Query {
     }
 }
 
+impl TryFrom<&str> for Query {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Query::from_raw(value)
+    }
+}
+
+impl TryFrom<String> for Query {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Query::from_raw(&value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::query::Query;
@@ -139,8 +155,8 @@ mod tests {
         assert_eq!(
             q.0,
             [
-                0x18, 0x00, 0x08, 0x00, 0x46, 0xf0, 0x03, 0x01, 0x03, 0x23, 0xff, 0x10, 0x01,
-                0x00, 0x05
+                0x18, 0x00, 0x08, 0x00, 0x46, 0xf0, 0x03, 0x01, 0x03, 0x23, 0xff, 0x10, 0x01, 0x00,
+                0x05
             ]
         );
     }
@@ -155,21 +171,5 @@ mod tests {
             .bytes(&[0xaa, 0xbb])
             .into();
         assert_eq!(q.0, [0x12, 0x01, 0x02, 0x03, 0x04, 0xaa, 0xbb]);
-    }
-}
-
-impl TryFrom<&str> for Query {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        Query::from_raw(value)
-    }
-}
-
-impl TryFrom<String> for Query {
-    type Error = anyhow::Error;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Query::from_raw(&value)
     }
 }

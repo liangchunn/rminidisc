@@ -13,7 +13,7 @@ pub enum Descriptor {
 }
 
 impl Descriptor {
-    fn to_str(&self) -> &str {
+    fn as_str(&self) -> &str {
         match self {
             Descriptor::DiskTitleTd => "10 1801",
             Descriptor::AudioUtoc1Td => "10 1802",
@@ -35,7 +35,7 @@ pub enum DescriptorAction {
 }
 
 impl DescriptorAction {
-    fn to_str(&self) -> &str {
+    fn as_str(&self) -> &str {
         match self {
             DescriptorAction::OpenRead => "01",
             DescriptorAction::OpenWrite => "03",
@@ -52,8 +52,8 @@ impl TryFrom<DescriptorCommand> for Query {
     fn try_from(value: DescriptorCommand) -> Result<Self, Self::Error> {
         Query::from_raw(&format!(
             "00 1808 {} {} 00",
-            value.0.to_str(),
-            value.1.to_str()
+            value.0.as_str(),
+            value.1.as_str()
         ))
     }
 }

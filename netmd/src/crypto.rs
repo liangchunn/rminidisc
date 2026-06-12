@@ -69,7 +69,11 @@ pub fn des_ecb_decrypt(key: &[u8; 8], data: &[u8]) -> Vec<u8> {
 
 /// Two-key Triple-DES CBC encrypt without padding. Key is 16 bytes.
 pub fn tdes_cbc_encrypt(key: &[u8; 16], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
-    assert_eq!(data.len() % 8, 0, "tdes_cbc_encrypt: data not block-aligned");
+    assert_eq!(
+        data.len() % 8,
+        0,
+        "tdes_cbc_encrypt: data not block-aligned"
+    );
     let mut buf = data.to_vec();
     let mut enc = TdesCbcEnc::new(key.into(), iv.into());
     for chunk in buf.chunks_mut(8) {
@@ -138,9 +142,9 @@ pub fn encrypt_packets(kek: &[u8; 8], frame_size: usize, data: &[u8]) -> Vec<Enc
 
     // Pad data to frame size.
     let mut padded = data.to_vec();
-    if padded.len() % frame_size != 0 {
+    if !padded.len().is_multiple_of(frame_size) {
         let pad = frame_size - (padded.len() % frame_size);
-        padded.extend(std::iter::repeat(0u8).take(pad));
+        padded.extend(std::iter::repeat_n(0u8, pad));
     }
 
     let default_chunk_size: usize = 0x0010_0000;
@@ -206,9 +210,7 @@ mod tests {
             0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x0f, 0xed, 0xcb, 0xa9, 0x87, 0x65,
             0x43, 0x21,
         ];
-        let nonce = [
-            1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-        ];
+        let nonce = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let iv = [0u8; 8];
         let mac1 = retailmac(&root_key, &nonce, &iv);
         let mac2 = retailmac(&root_key, &nonce, &iv);

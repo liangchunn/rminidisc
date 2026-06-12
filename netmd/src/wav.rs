@@ -145,7 +145,7 @@ mod tests {
         v.extend_from_slice(&byte_rate.to_le_bytes()); // byte rate
         v.extend_from_slice(&0xC0u16.to_le_bytes()); // block align
         v.extend_from_slice(&0u16.to_le_bytes()); // bits per sample
-        // data chunk
+                                                  // data chunk
         v.extend_from_slice(b"data");
         v.extend_from_slice(&(data.len() as u32).to_le_bytes());
         v.extend_from_slice(data);

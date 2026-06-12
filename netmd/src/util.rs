@@ -38,7 +38,7 @@ pub fn bcd_to_int(mut bcd: u16) -> u16 {
     let mut value: u16 = 0;
     let mut nibble: u32 = 0;
     while bcd != 0 {
-        let nibble_value = (bcd & 0x0f) as u16;
+        let nibble_value = bcd & 0x0f;
         bcd >>= 4;
         value += nibble_value * 10u16.pow(nibble);
         nibble += 1;
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn format_time_known_value() {
         // 06:52+042 of track length (h=0): seconds=6*60+52=412, frames=42.
-        let frames = ((0 * 60 + 6) * 60 + 52) * 512 + 42;
+        let frames = (6 * 60 + 52) * 512 + 42;
         assert_eq!(format_time_from_frames(frames), "00:06:52+042");
     }
 

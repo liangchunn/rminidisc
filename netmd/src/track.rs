@@ -20,8 +20,8 @@ use crate::{
 /// The hardcoded content ID used for uploads. Mirrors `MDTrack.getContentID`
 /// (`netmd-interface.ts:992`).
 const CONTENT_ID: [u8; 20] = [
-    0x01, 0x0f, 0x50, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x48, 0xa2, 0x8d, 0x3e, 0x1a, 0x3b,
-    0x0c, 0x44, 0xaf, 0x2f, 0xa0,
+    0x01, 0x0f, 0x50, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x48, 0xa2, 0x8d, 0x3e, 0x1a, 0x3b, 0x0c,
+    0x44, 0xaf, 0x2f, 0xa0,
 ];
 
 /// The hardcoded key-encryption-key. Mirrors `MDTrack.getKEK`
@@ -66,7 +66,7 @@ impl MdTrack {
     pub fn total_size(&self) -> usize {
         let fs = frame_size(self.format);
         let len = self.data.len();
-        if len % fs != 0 {
+        if !len.is_multiple_of(fs) {
             len + (fs - (len % fs))
         } else {
             len
@@ -96,7 +96,13 @@ pub fn download_track<T: UsbContext>(
     enter_secure_session(handle)?;
     let leaf_id = get_leaf_id(handle)?;
     let ekb = get_ekb_for_device(&leaf_id, vendor, product);
-    send_key_data(handle, ekb.ekb_id, &ekb.key_chain, ekb.depth, &ekb.signature)?;
+    send_key_data(
+        handle,
+        ekb.ekb_id,
+        &ekb.key_chain,
+        ekb.depth,
+        &ekb.signature,
+    )?;
 
     let mut host_nonce = [0u8; 8];
     {

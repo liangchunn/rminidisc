@@ -1,17 +1,19 @@
 //! `rmd` — thin runner over the `netmd` library.
 //!
 //! Commands:
-//!   rmd               — dump disc + track metadata (default)
-//!   rmd info          — same as above
-//!   rmd upload <file> [--format sp|lp2|lp105|lp4] [--title T]
+//!   rmd [--device VID:PID]
+//!                     — dump disc + track metadata (default)
+//!   rmd [--device VID:PID] info
+//!                     — same as above
+//!   rmd [--device VID:PID] upload <file> [--format sp|lp2|lp105|lp4] [--title T]
 //!                     — encode (if needed) and write a track to the device
-//!   rmd erase [<track> | disc]
+//!   rmd [--device VID:PID] erase [<track> | disc]
 //!                     — erase a single track (1-based, as shown by `info`),
 //!                       or the whole disc when given `disc` or no argument
-//!   rmd rename <track> <title> [--full]
-//!                     — set a track's title (1-based); `--full` writes the
+//!   rmd [--device VID:PID] rename <track | disc> <title> [--full]
+//!                     — set a track or disc title; `--full` writes the
 //!                       full-width title field
-//!   rmd move <from> <to>
+//!   rmd [--device VID:PID] move <from> <to>
 //!                     — reorder a track (1-based indexes)
 //!
 //! Device interaction is delegated to the `netmd` crate; this binary only does
@@ -29,23 +31,84 @@ use netmd::Wireformat;
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
-    let args: Vec<String> = std::env::args().collect();
+    let args = parse_global_args(std::env::args().skip(1))?;
     match args.get(1).map(String::as_str) {
-        None | Some("info") => cmd_info(),
-        Some("upload") => cmd_upload(&args[2..]),
-        Some("erase") => cmd_erase(&args[2..]),
-        Some("rename") => cmd_rename(&args[2..]),
-        Some("move") => cmd_move(&args[2..]),
+        None | Some("info") => cmd_info(args.device),
+        Some("upload") => cmd_upload(&args.rest[2..], args.device),
+        Some("erase") => cmd_erase(&args.rest[2..], args.device),
+        Some("rename") => cmd_rename(&args.rest[2..], args.device),
+        Some("move") => cmd_move(&args.rest[2..], args.device),
         Some(other) => {
             bail!(
-                "unknown command {other:?}. usage: rmd [info | \
+                "unknown command {other:?}. usage: rmd [--device VID:PID] [info | \
                  upload <file> [--format F] [--title T] | \
                  erase [<track> | disc] | \
-                 rename <track> <title> [--full] | \
+                 rename <track | disc> <title> [--full] | \
                  move <from> <to>]"
             )
         }
     }
+}
+
+struct Args {
+    device: Option<netmd::DeviceSelector>,
+    rest: Vec<String>,
+}
+
+impl Args {
+    fn get(&self, index: usize) -> Option<&String> {
+        self.rest.get(index)
+    }
+}
+
+fn parse_global_args<I>(args: I) -> anyhow::Result<Args>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut device = None;
+    let mut rest = vec![String::from("rmd")];
+    let mut args = args.into_iter();
+
+    while let Some(arg) = args.next() {
+        if arg == "--device" || arg == "-d" {
+            let value = args.next().context("--device requires VID:PID")?;
+            let selector = parse_device_selector(&value)?;
+            if device.replace(selector).is_some() {
+                bail!("--device specified more than once");
+            }
+        } else if let Some(value) = arg.strip_prefix("--device=") {
+            let selector = parse_device_selector(value)?;
+            if device.replace(selector).is_some() {
+                bail!("--device specified more than once");
+            }
+        } else {
+            rest.push(arg);
+        }
+    }
+
+    Ok(Args { device, rest })
+}
+
+fn parse_device_selector(value: &str) -> anyhow::Result<netmd::DeviceSelector> {
+    let (vendor, product) = value
+        .split_once(':')
+        .context("--device must be VID:PID, for example 054c:0084")?;
+    let vendor_id = parse_hex_u16(vendor).context("invalid device vendor ID")?;
+    let product_id = parse_hex_u16(product).context("invalid device product ID")?;
+
+    if netmd::supported_device(vendor_id, product_id).is_none() {
+        bail!("unsupported NetMD device {vendor_id:04x}:{product_id:04x}");
+    }
+
+    Ok(netmd::DeviceSelector::new(vendor_id, product_id))
+}
+
+fn parse_hex_u16(value: &str) -> anyhow::Result<u16> {
+    let value = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .unwrap_or(value);
+    Ok(u16::from_str_radix(value, 16)?)
 }
 
 /// Parses a 1-based track index (as shown by `info`) into a 0-based `u16`.
@@ -59,8 +122,8 @@ fn parse_track_index(s: &str) -> anyhow::Result<u16> {
     u16::try_from(n - 1).context("track number out of range")
 }
 
-fn cmd_info() -> anyhow::Result<()> {
-    let handle = netmd::open_device()?;
+fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let handle = netmd::open_device_matching(device)?;
 
     let title = netmd::get_disc_title(&handle, false)?;
     info!("disc title: {title:?}");
@@ -77,7 +140,13 @@ fn cmd_info() -> anyhow::Result<()> {
     info!("disc present: {disc_present}");
 
     let disc_flags = netmd::get_disc_flags(&handle)?;
-    info!("disc flags: 0x{disc_flags:02x}");
+    info!(
+        "disc flags: raw=0x{:02x} writable={} write_protected={} unknown=0x{:02x}",
+        disc_flags.raw(),
+        disc_flags.is_writable(),
+        disc_flags.is_write_protected(),
+        disc_flags.unknown_bits()
+    );
 
     match netmd::get_disc_capacity(&handle) {
         Ok(cap) => info!(
@@ -88,7 +157,10 @@ fn cmd_info() -> anyhow::Result<()> {
     }
 
     match netmd::get_full_operating_status(&handle) {
-        Ok((mode, status)) => info!("operating status: mode={mode} status=0x{status:04x}"),
+        Ok(status) => info!(
+            "operating status: mode=0x{:02x} status={:?}",
+            status.mode, status.status
+        ),
         Err(e) => info!("operating status unavailable: {e}"),
     }
 
@@ -101,7 +173,7 @@ fn cmd_info() -> anyhow::Result<()> {
         let (encoding, channels) = netmd::get_track_encoding(&handle, track)?;
         let flags = netmd::get_track_flags(&handle, track)?;
         info!(
-            "track {}: {:?} len={:02}:{:02}:{:02}+{:03} enc=0x{:02x} ch={} flags=0x{:02x}",
+            "track {}: {:?} len={:02}:{:02}:{:02}+{:03} enc={:?} ch={:?} flags=0x{:02x}",
             track + 1,
             title,
             length[0],
@@ -118,13 +190,13 @@ fn cmd_info() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_erase(args: &[String]) -> anyhow::Result<()> {
+fn cmd_erase(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     let target = args.first().map(String::as_str);
     if args.len() > 1 {
         bail!("usage: rmd erase [<track> | disc]");
     }
 
-    let handle = netmd::open_device()?;
+    let handle = netmd::open_device_matching(device)?;
     match target {
         None | Some("disc") => {
             netmd::erase_disc(&handle)?;
@@ -140,42 +212,51 @@ fn cmd_erase(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_rename(args: &[String]) -> anyhow::Result<()> {
-    let mut track: Option<u16> = None;
+fn cmd_rename(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let mut target: Option<String> = None;
     let mut title: Option<String> = None;
     let mut full = false;
 
     for arg in args {
         match arg.as_str() {
             "--full" => full = true,
-            other if track.is_none() => track = Some(parse_track_index(other)?),
+            other if target.is_none() => target = Some(other.to_string()),
             other if title.is_none() => title = Some(other.to_string()),
             other => bail!("unexpected argument {other:?}"),
         }
     }
 
-    let track = track.context("usage: rmd rename <track> <title> [--full]")?;
-    let title = title.context("usage: rmd rename <track> <title> [--full]")?;
+    let target = target.context("usage: rmd rename <track | disc> <title> [--full]")?;
+    let title = title.context("usage: rmd rename <track | disc> <title> [--full]")?;
 
-    let handle = netmd::open_device()?;
-    netmd::set_track_title(&handle, track, &title, full)?;
-    info!(
-        "renamed track #{} to {title:?}{}",
-        track + 1,
-        if full { " (full-width)" } else { "" }
-    );
+    let handle = netmd::open_device_matching(device)?;
+    if target == "disc" {
+        netmd::rename_disc(&handle, &title, full)?;
+        info!(
+            "renamed disc to {title:?}{}",
+            if full { " (full-width)" } else { "" }
+        );
+    } else {
+        let track = parse_track_index(&target)?;
+        netmd::set_track_title(&handle, track, &title, full)?;
+        info!(
+            "renamed track #{} to {title:?}{}",
+            track + 1,
+            if full { " (full-width)" } else { "" }
+        );
+    }
     netmd::close_device(&handle)?;
     Ok(())
 }
 
-fn cmd_move(args: &[String]) -> anyhow::Result<()> {
+fn cmd_move(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     if args.len() != 2 {
         bail!("usage: rmd move <from> <to>");
     }
     let source = parse_track_index(&args[0])?;
     let dest = parse_track_index(&args[1])?;
 
-    let handle = netmd::open_device()?;
+    let handle = netmd::open_device_matching(device)?;
     netmd::move_track(&handle, source, dest)?;
     info!("moved track #{} -> #{}", source + 1, dest + 1);
     netmd::close_device(&handle)?;
@@ -223,7 +304,7 @@ fn parse_upload_args(args: &[String]) -> anyhow::Result<UploadArgs> {
     })
 }
 
-fn cmd_upload(args: &[String]) -> anyhow::Result<()> {
+fn cmd_upload(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     let args = parse_upload_args(args)?;
     let requested = args.format.to_lowercase();
 
@@ -249,25 +330,20 @@ fn cmd_upload(args: &[String]) -> anyhow::Result<()> {
         data,
     };
 
-    let handle = netmd::open_device()?;
+    let handle = netmd::open_device_matching(device)?;
     let (vendor, product) = netmd::device_ids(&handle)?;
 
     let mut last_pct = u64::MAX;
     let mut progress = |written: u64, total: u64| {
-        let pct = if total > 0 { written * 100 / total } else { 0 };
+        let pct = written.saturating_mul(100).checked_div(total).unwrap_or(0);
         if pct != last_pct {
             info!("transferred {written} / {total} bytes ({pct}%)");
             last_pct = pct;
         }
     };
 
-    let (track_num, uuid, ccid) = netmd::track::download_track(
-        &handle,
-        &track,
-        vendor,
-        product,
-        Some(&mut progress),
-    )?;
+    let (track_num, uuid, ccid) =
+        netmd::track::download_track(&handle, &track, vendor, product, Some(&mut progress))?;
 
     info!("uploaded track #{track_num} (uuid={uuid} ccid={ccid}) title={title:?}");
 
@@ -305,7 +381,9 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Ve
         "lp2" | "lp105" | "lp4" => {
             // First make a clean 44.1k stereo WAV via ffmpeg.
             let wav_in = temp_path("wav");
-            run_ffmpeg(&["-y", "-i", input, "-ar", "44100", "-ac", "2", "-f", "wav", &wav_in])?;
+            run_ffmpeg(&[
+                "-y", "-i", input, "-ar", "44100", "-ac", "2", "-f", "wav", &wav_in,
+            ])?;
 
             // Encode to ATRAC3 (RIFF container) via atracdenc.
             let (codec, bitrate, wf) = match requested {
