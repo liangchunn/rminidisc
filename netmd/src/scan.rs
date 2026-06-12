@@ -29,47 +29,39 @@ pub fn scan<'a>(template: &'a str, data: &'a [u8]) -> anyhow::Result<Vec<&'a [u8
                         index += 1;
                     }
                     'b' => {
-                        let slice =
-                            data.get(index..index + 1).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data.get(index..index + 1).ok_or(anyhow!("out of bounds"))?;
                         result.push(slice);
                         index += 1;
                     }
                     'w' => {
-                        let slice =
-                            data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
                         result.push(slice);
                         index += 2;
                     }
                     'd' => {
-                        let slice =
-                            data.get(index..index + 4).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data.get(index..index + 4).ok_or(anyhow!("out of bounds"))?;
                         result.push(slice);
                         index += 4;
                     }
                     'q' => {
-                        let slice =
-                            data.get(index..index + 8).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data.get(index..index + 8).ok_or(anyhow!("out of bounds"))?;
                         result.push(slice);
                         index += 8;
                     }
                     'B' => {
-                        let slice =
-                            data.get(index..index + 1).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data.get(index..index + 1).ok_or(anyhow!("out of bounds"))?;
                         result.push(slice);
                         index += 1;
                     }
                     'W' => {
-                        let slice =
-                            data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
                         result.push(slice);
                         index += 2;
                     }
                     'x' | 's' => {
-                        let len_bytes = data
-                            .get(index..index + 2)
-                            .ok_or(anyhow!("out of bounds"))?;
-                        let length =
-                            u16::from_be_bytes(<[u8; 2]>::try_from(len_bytes)?) as usize;
+                        let len_bytes =
+                            data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
+                        let length = u16::from_be_bytes(<[u8; 2]>::try_from(len_bytes)?) as usize;
                         index += 2;
                         let slice = data
                             .get(index..index + length)
@@ -78,8 +70,7 @@ pub fn scan<'a>(template: &'a str, data: &'a [u8]) -> anyhow::Result<Vec<&'a [u8
                         index += length;
                     }
                     'z' => {
-                        let length =
-                            *data.get(index).ok_or(anyhow!("out of bounds"))? as usize;
+                        let length = *data.get(index).ok_or(anyhow!("out of bounds"))? as usize;
                         index += 1;
                         let slice = data
                             .get(index..index + length)
@@ -127,9 +118,9 @@ mod tests {
     fn t() {
         let input = "00 01 ff %b ff %w ff %d ff %q ff %? %b aa %*";
         let data = &[
-            0x00, 0x01, 0xff, 0x01, 0xff, 0x01, 0x02, 0xff, 0x01, 0x02, 0x03, 0x04, 0xff,
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xff, 0x0a, 0xff, 0xaa, 0x01,
-            0x02, 0x03, 0x04,
+            0x00, 0x01, 0xff, 0x01, 0xff, 0x01, 0x02, 0xff, 0x01, 0x02, 0x03, 0x04, 0xff, 0x01,
+            0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xff, 0x0a, 0xff, 0xaa, 0x01, 0x02, 0x03,
+            0x04,
         ];
 
         let r = scan(input, data).unwrap();

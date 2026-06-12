@@ -6,7 +6,7 @@ reference implementation lives.
 
 ---
 
-## 1. Title Sanitization (deferred by decision)
+## 1. Title Sanitization (ported)
 
 `setDiscTitle` / `setTrackTitle` in the JS reference call:
 
@@ -20,25 +20,22 @@ These involve large character-remapping tables:
 - `getHalfWidthTitleLength` multi-byte awareness (`utils.ts:230`)
 - `halfWidthToFullWidthRange` (ported in `util.rs`? No — only used by groups)
 
-**Current Rust behavior:** `set_disc_title` / `set_track_title` encode the title
-to SHIFT_JIS **as-is** with no sanitization. Titles containing characters that
-require remapping may be rejected by `encode_to_sjis` or stored differently than
-the official tools would store them.
-
-**To research/port later:** faithfully translate the mapping tables from
-`utils.ts` into Rust.
+**Rust behavior:** `set_disc_title` / `set_track_title` sanitize titles before
+SHIFT_JIS encoding via `netmd/src/title.rs`, including half-width/full-width kana,
+dakuten/handakuten flattening, Japanese / Russian / German mappings, and the
+half-width length helper.
 
 ---
 
-## 2. Sharp Vendor Quirk in `setDiscTitle`
+## 2. Sharp Vendor Quirk in `setDiscTitle` (ported)
 
 `netmd-interface.ts:589-605`: for vendor `0x04dd` (Sharp), disc rename uses the
 `audioUTOC1TD` descriptor with `openWrite`/`close` instead of the `discTitleTD`
 open/close dance (webminidisc issue #67).
 
-**Current Rust behavior:** only the standard (Sony-style) branch is implemented.
-The connected MZ-N505 is Sony (`0x054c`) so this is fine here, but Sharp devices
-need the alternate descriptor flow.
+**Rust behavior:** `set_disc_title` detects vendor `0x04dd` and uses the
+`audioUTOC1TD` open-write/close descriptor flow. This branch is covered by unit
+tests but has not been exercised against real Sharp hardware in this repository.
 
 ---
 

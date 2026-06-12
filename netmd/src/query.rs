@@ -49,6 +49,25 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn whitespace_is_ignored() {
+        assert_eq!(Query::from_raw("18 06").unwrap().0, [0x18, 0x06]);
+        assert_eq!(Query::from_raw("1806").unwrap().0, [0x18, 0x06]);
+        assert_eq!(Query::from_raw("18  06  ff").unwrap().0, [0x18, 0x06, 0xff]);
+    }
+
+    #[test]
+    fn odd_length_is_rejected() {
+        // After stripping whitespace, an odd number of hex digits is invalid.
+        assert!(Query::from_raw("180").is_err());
+        assert!(Query::from_raw("18 0").is_err());
+    }
+
+    #[test]
+    fn empty_is_valid_empty_buffer() {
+        assert_eq!(Query::from_raw("").unwrap().0, Vec::<u8>::new());
+    }
 }
 
 impl TryFrom<&str> for Query {

@@ -1,3 +1,6 @@
 /target
 /netmd-js
 /scan-query
+/webminidisc
+*.wav
+*.raw

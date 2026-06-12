@@ -21,6 +21,7 @@ use crate::{
     error::NetMDError,
     query::Query,
     scan::scan,
+    title::{sanitize_full_width_title, sanitize_half_width_title},
     types::{
         ProtocolReply, ReadRequestData, ReadRequestHeader, INTERIM_RETRY_INTERVAL_MS,
         MAX_INTERIM_ATTEMPTS, READ_REPLY_POLL_INTERVAL_MS, USB_TIMEOUT_MILLIS,
@@ -35,6 +36,7 @@ pub mod descriptor;
 pub mod error;
 pub mod query;
 pub mod scan;
+pub mod title;
 pub mod types;
 pub mod util;
 
@@ -44,13 +46,15 @@ pub mod util;
 // so downstream crates can reach everything via `netmd::descriptor::...` etc.)
 pub use error::NetMDError as Error;
 pub use types::{
-    Channels, ChannelCount, DiscFlag, DiscFormat, Encoding, NetMDLevel, ProtocolReply as Status,
+    ChannelCount, Channels, DiscFlag, DiscFormat, Encoding, NetMDLevel, ProtocolReply as Status,
     TrackFlag, Wireformat, FRAME_SIZE,
 };
 pub use util::{format_time_from_frames, time_to_frames};
 
 /// Sony USB vendor ID.
 pub const SONY_VENDOR_ID: u16 = 0x054c;
+/// Sharp USB vendor ID. Sharp devices need a different disc-title descriptor flow.
+pub const SHARP_VENDOR_ID: u16 = 0x04dd;
 /// Product ID of the Sony MZ-N505 (the currently supported device).
 pub const MZ_N505_PRODUCT_ID: u16 = 0x0084;
 
@@ -69,7 +73,9 @@ pub fn open_device() -> anyhow::Result<DeviceHandle<GlobalContext>> {
                 .unwrap_or(false)
         })
         .collect::<Vec<_>>();
-    let device = devices.first().ok_or_else(|| anyhow::anyhow!("cannot find device"))?;
+    let device = devices
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("cannot find device"))?;
     let device_desc = device.device_descriptor()?;
     let handle = device.open()?;
 
@@ -201,7 +207,10 @@ pub fn read_reply_checked<T: UsbContext>(
 ///
 /// Opens the audioContents + discTitle descriptors, reads all chunks, then
 /// closes them. `w_char` selects the full-width (wchar) title table.
-pub fn get_disk_title<T: UsbContext>(handle: &DeviceHandle<T>, w_char: bool) -> anyhow::Result<String> {
+pub fn get_disk_title<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    w_char: bool,
+) -> anyhow::Result<String> {
     change_descriptor_state(
         handle,
         Descriptor::AudioContentsTd,
@@ -265,7 +274,10 @@ pub fn get_disk_title<T: UsbContext>(handle: &DeviceHandle<T>, w_char: bool) -> 
 /// Mirrors `NetMDInterface.getDiscTitle`. If the raw title ends with the group
 /// delimiter (`//` or full-width `／／`), the leading `0;`/`０；` title cell is
 /// extracted; otherwise the title is cleared.
-pub fn get_disc_title<T: UsbContext>(handle: &DeviceHandle<T>, w_char: bool) -> anyhow::Result<String> {
+pub fn get_disc_title<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    w_char: bool,
+) -> anyhow::Result<String> {
     let mut title = get_disk_title(handle, w_char)?;
 
     let delim = if w_char { "／／" } else { "//" };
@@ -325,11 +337,7 @@ pub fn get_track_count<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Resul
     } else {
         unreachable!()
     };
-    change_descriptor_state(
-        handle,
-        Descriptor::AudioContentsTd,
-        DescriptorAction::Close,
-    )?;
+    change_descriptor_state(handle, Descriptor::AudioContentsTd, DescriptorAction::Close)?;
     Ok(track_count)
 }
 
@@ -355,30 +363,61 @@ pub fn read_reply_length<T: UsbContext>(
     Ok(reply_header)
 }
 
-/// Sets the disc title. Mirrors `NetMDInterface.setDiscTitle` (standard branch).
-///
-/// NOTE: title sanitization (`sanitizeHalfWidthTitle`/`sanitizeFullWidthTitle`)
-/// is NOT applied — the title is encoded to SHIFT_JIS as-is. See UNPORTED.md.
-/// The Sharp (vendor 0x04dd) descriptor variant is also not handled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiscTitleWriteFlow {
+    Standard,
+    Sharp,
+}
+
+fn disc_title_write_flow(vendor_id: u16) -> DiscTitleWriteFlow {
+    if vendor_id == SHARP_VENDOR_ID {
+        DiscTitleWriteFlow::Sharp
+    } else {
+        DiscTitleWriteFlow::Standard
+    }
+}
+
+fn sanitize_title(title: &str, w_char: bool) -> String {
+    if w_char {
+        sanitize_full_width_title(title)
+    } else {
+        sanitize_half_width_title(title)
+    }
+}
+
+/// Sets the disc title. Mirrors `NetMDInterface.setDiscTitle`.
 pub fn set_disc_title<T: UsbContext>(
     handle: &DeviceHandle<T>,
     title: &str,
     w_char: bool,
 ) -> anyhow::Result<()> {
     debug!("set disc title: {title:?} (wchar={w_char})");
+    let title = sanitize_title(title, w_char);
     let current_title = get_disk_title(handle, w_char)?;
-    if current_title == title {
+    if current_title == title.as_str() {
         // Setting the same title causes problems with the LAM.
         return Ok(());
     }
     let old_len = get_length_after_sjis_encode(&current_title)?;
-    let new_len = get_length_after_sjis_encode(title)?;
+    let new_len = get_length_after_sjis_encode(&title)?;
     let wchar_value: u8 = if w_char { 1 } else { 0 };
-    let sjis = encode_to_sjis(title)?;
+    let sjis = encode_to_sjis(&title)?;
     let sjis_hex = sjis.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let flow = disc_title_write_flow(handle.device().device_descriptor()?.vendor_id());
 
-    change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::Close)?;
-    change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::OpenWrite)?;
+    match flow {
+        DiscTitleWriteFlow::Sharp => {
+            change_descriptor_state(
+                handle,
+                Descriptor::AudioUtoc1Td,
+                DescriptorAction::OpenWrite,
+            )?;
+        }
+        DiscTitleWriteFlow::Standard => {
+            change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::Close)?;
+            change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::OpenWrite)?;
+        }
+    }
 
     let query = format!(
         "00 1807 02201801 00{:02x} 3000 0a00 5000 {:04x} 0000 {:04x} {}",
@@ -387,15 +426,20 @@ pub fn set_disc_title<T: UsbContext>(
     let reply = send_query(handle, query)?;
     reply.scan("%? 1807 02201801 00%? 3000 0a00 5000 %?%? 0000 %?%?")?;
 
-    change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::Close)?;
-    change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::OpenRead)?;
-    change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::Close)?;
+    match flow {
+        DiscTitleWriteFlow::Sharp => {
+            change_descriptor_state(handle, Descriptor::AudioUtoc1Td, DescriptorAction::Close)?;
+        }
+        DiscTitleWriteFlow::Standard => {
+            change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::Close)?;
+            change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::OpenRead)?;
+            change_descriptor_state(handle, Descriptor::DiskTitleTd, DescriptorAction::Close)?;
+        }
+    }
     Ok(())
 }
 
 /// Sets a track's title. Mirrors `NetMDInterface.setTrackTitle`. `track` is 0-based.
-///
-/// NOTE: title sanitization is NOT applied (see UNPORTED.md).
 pub fn set_track_title<T: UsbContext>(
     handle: &DeviceHandle<T>,
     track: u16,
@@ -403,6 +447,7 @@ pub fn set_track_title<T: UsbContext>(
     w_char: bool,
 ) -> anyhow::Result<()> {
     debug!("set track title #{track}: {title:?} (wchar={w_char})");
+    let title = sanitize_title(title, w_char);
     let wchar_value: u8 = if w_char { 3 } else { 2 };
     let descriptor = if w_char {
         Descriptor::AudioUtoc4Td
@@ -410,11 +455,11 @@ pub fn set_track_title<T: UsbContext>(
         Descriptor::AudioUtoc1Td
     };
 
-    let new_len = get_length_after_sjis_encode(title)?;
+    let new_len = get_length_after_sjis_encode(&title)?;
     // If the current title matches, skip. A rejected read means no current title.
     let old_len = match get_track_title(handle, track, w_char) {
         Ok(current) => {
-            if current == title {
+            if current == title.as_str() {
                 return Ok(());
             }
             get_length_after_sjis_encode(&current)?
@@ -422,7 +467,7 @@ pub fn set_track_title<T: UsbContext>(
         Err(_) => 0,
     };
 
-    let sjis = encode_to_sjis(title)?;
+    let sjis = encode_to_sjis(&title)?;
     let sjis_hex = sjis.iter().map(|b| format!("{b:02x}")).collect::<String>();
 
     change_descriptor_state(handle, descriptor, DescriptorAction::OpenWrite)?;
@@ -490,11 +535,7 @@ pub fn get_track_info<T: UsbContext>(
     let reply = send_query(handle, query)?;
     let data = reply.scan("%? 1806 02201001 %?%? %?%? %?%? 1000 00%?0000 %x")?;
     let raw = data[0].to_vec();
-    change_descriptor_state(
-        handle,
-        Descriptor::AudioContentsTd,
-        DescriptorAction::Close,
-    )?;
+    change_descriptor_state(handle, Descriptor::AudioContentsTd, DescriptorAction::Close)?;
     Ok(raw)
 }
 
@@ -534,11 +575,7 @@ pub fn get_track_flags<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> a
     let reply = send_query(handle, query)?;
     let data = reply.scan("%? 1806 01201001 %?%? 10 00 00010008 %b")?;
     let flags = parse_u8(data[0])?;
-    change_descriptor_state(
-        handle,
-        Descriptor::AudioContentsTd,
-        DescriptorAction::Close,
-    )?;
+    change_descriptor_state(handle, Descriptor::AudioContentsTd, DescriptorAction::Close)?;
     Ok(flags)
 }
 
@@ -716,9 +753,8 @@ pub fn get_full_operating_status<T: UsbContext>(
         handle,
         "00 1809 8001 0330 8802 0030 8805 0030 8806 00 ff00 00000000",
     )?;
-    let data = reply.scan(
-        "%? 1809 8001 0330 8802 0030 8805 0030 8806 00 1000 00%?0000 00%b 8806 %x",
-    )?;
+    let data =
+        reply.scan("%? 1809 8001 0330 8802 0030 8805 0030 8806 00 1000 00%?0000 00%b 8806 %x")?;
     let status_mode = parse_u8(data[0])?;
     let operating_status = data[1];
     change_descriptor_state(
@@ -767,4 +803,28 @@ pub fn read_reply<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<ReadRequest
     trace!("  RX ← {:02x?}", reply.0);
 
     Ok(reply)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disc_title_write_flow_uses_sharp_branch_only_for_sharp_vendor() {
+        assert_eq!(
+            disc_title_write_flow(SHARP_VENDOR_ID),
+            DiscTitleWriteFlow::Sharp
+        );
+        assert_eq!(
+            disc_title_write_flow(SONY_VENDOR_ID),
+            DiscTitleWriteFlow::Standard
+        );
+        assert_eq!(disc_title_write_flow(0x1234), DiscTitleWriteFlow::Standard);
+    }
+
+    #[test]
+    fn sanitize_title_selects_width_specific_sanitizer() {
+        assert_eq!(sanitize_title("ソニー", false), "ｿﾆ-");
+        assert_eq!(sanitize_title("Sony 1", true), "Ｓｏｎｙ　１");
+    }
 }

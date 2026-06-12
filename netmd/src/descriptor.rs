@@ -57,3 +57,44 @@ impl TryFrom<DescriptorCommand> for Query {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disc_title_open_read_frame() {
+        let q: Query = DescriptorCommand(Descriptor::DiskTitleTd, DescriptorAction::OpenRead)
+            .try_into()
+            .unwrap();
+        // 00 (status) 1808 (cmd) 101801 (disc title TD) 01 (open read) 00
+        assert_eq!(q.0, [0x00, 0x18, 0x08, 0x10, 0x18, 0x01, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn audio_contents_close_frame() {
+        let q: Query = DescriptorCommand(Descriptor::AudioContentsTd, DescriptorAction::Close)
+            .try_into()
+            .unwrap();
+        // 00 1808 101001 00 00
+        assert_eq!(q.0, [0x00, 0x18, 0x08, 0x10, 0x10, 0x01, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn operating_status_block_uses_8000() {
+        // Per PORTING_REFERENCE: operatingStatusBlock is `80 00`, not `00 00`.
+        let q: Query =
+            DescriptorCommand(Descriptor::OperatingStatusBlock, DescriptorAction::OpenRead)
+                .try_into()
+                .unwrap();
+        assert_eq!(q.0, [0x00, 0x18, 0x08, 0x80, 0x00, 0x01, 0x00]);
+    }
+
+    #[test]
+    fn root_open_write_frame() {
+        let q: Query = DescriptorCommand(Descriptor::RootTd, DescriptorAction::OpenWrite)
+            .try_into()
+            .unwrap();
+        assert_eq!(q.0, [0x00, 0x18, 0x08, 0x10, 0x10, 0x00, 0x03, 0x00]);
+    }
+}

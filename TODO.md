@@ -248,12 +248,12 @@ All commands use the `1800 080046 f0030103` prefix.
 - [ ] `timeToFrames([h,m,s,f])` — time array → absolute frame count
 - [ ] `encodeToSJIS(utf8)` / `decodeFromSJIS(sjis)` — text encoding
 - [ ] `getLengthAfterEncodingToSJIS(utf8)` — byte length prediction
-- [ ] `getHalfWidthTitleLength(title)` — title length with multi-byte awareness
-- [ ] `sanitizeHalfWidthTitle(title)` — full-width → half-width conversion
-- [ ] `sanitizeFullWidthTitle(title)` — half-width → full-width + JP/RU/DE mappings
+- [x] `getHalfWidthTitleLength(title)` — title length with multi-byte awareness
+- [x] `sanitizeHalfWidthTitle(title)` — full-width → half-width conversion
+- [x] `sanitizeFullWidthTitle(title)` — half-width → full-width + JP/RU/DE mappings
 - [ ] `sanitizeTrackTitle(title)` — encodeURIComponent wrapper
 - [ ] `aggressiveSanitizeTitle(title)` — strip non-ASCII
-- [ ] `halfWidthToFullWidthRange(range)` — ASCII "1-3" → "１－３"
+- [x] `halfWidthToFullWidthRange(range)` — ASCII "1-3" → "１－３"
 - [ ] `createAeaHeader(...)` — 2048-byte AEA header
 - [ ] `createWavHeader(format, bytes)` — WAV/ATRAC3 header
 - [ ] `encryptDataForFactoryTransfer(data)` / `decryptDataFromFactoryTransfer(data)` — DES-ECB
