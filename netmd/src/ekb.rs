@@ -103,7 +103,11 @@ mod tests {
 
     #[test]
     fn falls_back_to_open_source_ekb_for_normal_leaf_id() {
-        let ekb = get_ekb_for_device(&[0x01, 0x02, 0x03], SONY_VENDOR_ID, CORRUPTED_DECK_PRODUCT_ID);
+        let ekb = get_ekb_for_device(
+            &[0x01, 0x02, 0x03],
+            SONY_VENDOR_ID,
+            CORRUPTED_DECK_PRODUCT_ID,
+        );
 
         assert_eq!(ekb.ekb_id, 0x2642_2642);
         assert_eq!(ekb.key_chain.len(), 2);
