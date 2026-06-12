@@ -1,5 +1,6 @@
 use crate::query::Query;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Descriptor {
     DiskTitleTd,
     AudioUtoc1Td,
@@ -21,11 +22,12 @@ impl Descriptor {
             Descriptor::AudioContentsTd => "10 1001",
             Descriptor::RootTd => "10 1000",
             Descriptor::DiscSubUnitIdentifier => "00",
-            Descriptor::OperatingStatusBlock => "00 00",
+            Descriptor::OperatingStatusBlock => "80 00",
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DescriptorAction {
     OpenRead,
     OpenWrite,

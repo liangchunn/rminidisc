@@ -1,0 +1,10 @@
+[package]
+name = "netmd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+encoding_rs = { workspace = true }
+log = { workspace = true }
+rusb = { workspace = true }
