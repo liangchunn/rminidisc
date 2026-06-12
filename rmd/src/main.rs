@@ -15,9 +15,20 @@
 //!                       full-width title field
 //!   rmd [--device VID:PID] move <from> <to>
 //!                     — reorder a track (1-based indexes)
+//!   rmd [--device VID:PID] play | pause | stop | next | prev | ff | rewind | eject
+//!                     — one-shot playback transport controls
+//!   rmd [--device VID:PID] goto <track>
+//!                     — seek to the start of a track (1-based)
+//!   rmd [--device VID:PID] status
+//!                     — print a one-shot playback status snapshot
+//!   rmd [--device VID:PID] control
+//!                     — launch the interactive playback TUI
 //!
 //! Device interaction is delegated to the `netmd` crate; this binary only does
 //! argument parsing and host-side audio preparation (ffmpeg / atracdenc).
+
+mod logbuf;
+mod tui;
 
 use std::path::Path;
 use std::process::Command;
@@ -29,22 +40,37 @@ use netmd::wav;
 use netmd::Wireformat;
 
 fn main() -> anyhow::Result<()> {
+    let args = parse_global_args(std::env::args().skip(1))?;
+
+    // The interactive TUI installs its own in-memory logger (env_logger would
+    // write to stderr and corrupt the full-screen UI). Every other command uses
+    // the normal stderr logger.
+    if args.get(1).map(String::as_str) == Some("control") {
+        return tui::run(args.device);
+    }
     env_logger::init();
 
-    let args = parse_global_args(std::env::args().skip(1))?;
     match args.get(1).map(String::as_str) {
         None | Some("info") => cmd_info(args.device),
         Some("upload") => cmd_upload(&args.rest[2..], args.device),
         Some("erase") => cmd_erase(&args.rest[2..], args.device),
         Some("rename") => cmd_rename(&args.rest[2..], args.device),
         Some("move") => cmd_move(&args.rest[2..], args.device),
+        Some("play") | Some("pause") | Some("stop") | Some("next") | Some("prev")
+        | Some("ff") | Some("rewind") | Some("eject") => {
+            cmd_transport(args.get(1).unwrap(), args.device)
+        }
+        Some("goto") => cmd_goto(&args.rest[2..], args.device),
+        Some("status") => cmd_status(args.device),
         Some(other) => {
             bail!(
                 "unknown command {other:?}. usage: rmd [--device VID:PID] [info | \
                  upload <file> [--format F] [--title T] | \
                  erase [<track> | disc] | \
                  rename <track | disc> <title> [--full] | \
-                 move <from> <to>]"
+                 move <from> <to> | \
+                 play | pause | stop | next | prev | ff | rewind | eject | \
+                 goto <track> | status | control]"
             )
         }
     }
@@ -259,6 +285,56 @@ fn cmd_move(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::R
     let handle = netmd::open_device_matching(device)?;
     netmd::move_track(&handle, source, dest)?;
     info!("moved track #{} -> #{}", source + 1, dest + 1);
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+fn cmd_transport(action: &str, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let handle = netmd::open_device_matching(device)?;
+    match action {
+        "play" => netmd::play(&handle)?,
+        "pause" => netmd::pause(&handle)?,
+        "stop" => netmd::stop(&handle)?,
+        "next" => netmd::next_track(&handle)?,
+        "prev" => netmd::previous_track(&handle)?,
+        "ff" => netmd::fast_forward(&handle)?,
+        "rewind" => netmd::rewind(&handle)?,
+        "eject" => netmd::eject_disc(&handle)?,
+        other => bail!("unknown transport action {other:?}"),
+    }
+    info!("{action}");
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+fn cmd_goto(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    if args.len() != 1 {
+        bail!("usage: rmd goto <track>");
+    }
+    let track = parse_track_index(&args[0])?;
+    let handle = netmd::open_device_matching(device)?;
+    let resulting = netmd::goto_track(&handle, track)?;
+    info!("seeked to track #{}", resulting + 1);
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+fn cmd_status(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let handle = netmd::open_device_matching(device)?;
+    let status = netmd::get_device_status(&handle)?;
+    info!("disc present: {}", status.disc_present);
+    info!("state: {:?}", status.state);
+    match status.track {
+        Some(t) => info!("track: #{}", t + 1),
+        None => info!("track: -"),
+    }
+    match status.time {
+        Some(t) => info!(
+            "time: {:02}:{:02}+{:03}",
+            t.minute, t.second, t.frame
+        ),
+        None => info!("time: -"),
+    }
     netmd::close_device(&handle)?;
     Ok(())
 }

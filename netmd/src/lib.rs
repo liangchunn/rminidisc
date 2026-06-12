@@ -4,12 +4,14 @@
 //! The crate root is intentionally a small facade; implementation details live
 //! in focused modules by protocol area.
 
+pub mod commands;
 pub mod crypto;
 pub mod descriptor;
 pub mod device;
 pub mod disc;
 pub mod ekb;
 pub mod error;
+pub mod playback;
 pub mod query;
 pub mod scan;
 pub mod secure;
@@ -22,6 +24,7 @@ pub mod types;
 pub mod util;
 pub mod wav;
 
+pub use commands::get_device_status;
 pub use descriptor::change_descriptor_state;
 pub use device::{
     close_device, device_ids, open_device, open_device_matching, supported_device,
@@ -33,6 +36,11 @@ pub use disc::{
     rename_disc, set_disc_title,
 };
 pub use error::NetMDError as Error;
+pub use playback::{
+    can_eject_disc, eject_disc, fast_forward, get_playback_status1, get_playback_status2,
+    get_position, get_recording_parameters, goto_time, goto_track, next_track, pause, play,
+    previous_track, restart_track, rewind, stop,
+};
 pub use secure::{
     acquire, commit_track, disable_new_track_protection, enter_secure_session, get_leaf_id,
     leave_secure_session, prepare_download, release, send_key_data, send_track,
@@ -48,7 +56,8 @@ pub use transport::{
     BULK_WRITE_ENDPOINT,
 };
 pub use types::{
-    ChannelCount, Channels, DiscFlag, DiscFlags, DiscFormat, Encoding, FullOperatingStatus,
-    NetMDLevel, OperatingStatus, ProtocolReply as Status, TrackFlag, Wireformat, FRAME_SIZE,
+    ChannelCount, Channels, DeviceStatus, DiscFlag, DiscFlags, DiscFormat, Encoding,
+    FullOperatingStatus, NetMDLevel, OperatingStatus, PlaybackState, PlaybackTime,
+    ProtocolReply as Status, TrackFlag, Wireformat, FRAME_SIZE,
 };
 pub use util::{format_time_from_frames, time_to_frames};

@@ -95,12 +95,23 @@ useful, but not in the CORE_TODO list. The raw title is already readable via
 
 ---
 
-## 5. Playback Control (not in CORE_TODO)
+## 5. Playback Control (ported)
 
 `netmd-interface.ts:347-424`: `play`/`pause`/`stop`/`fast_forward`/`rewind`,
 `gotoTrack`/`gotoTime`, `nextTrack`/`previousTrack`/`restartTrack`,
 `ejectDisc`/`canEjectDisc`, `getPosition`, `getPlaybackStatus1/2`,
-`getRecordingParameters`. Straightforward to port later (no crypto/bulk needed).
+`getRecordingParameters`.
+
+**Rust behavior:** ported in `netmd/src/playback.rs` (transport, seek, eject,
+position, playback-status reads, recording parameters) plus the high-level
+`get_device_status` in `netmd/src/commands.rs` (mirrors
+`netmd-commands.ts:131`). The scan templates match the JS reference 1:1 and the
+state-derivation logic is unit-tested, but the transport/seek/eject paths have
+not been exercised against real hardware in this repository.
+
+Exposed via the `rmd` binary as one-shot subcommands
+(`play|pause|stop|next|prev|ff|rewind|eject|goto <track>|status`) and an
+interactive ratatui TUI (`rmd control`).
 
 ---
 

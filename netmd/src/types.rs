@@ -163,6 +163,61 @@ impl OperatingStatus {
     }
 }
 
+/// High-level playback / operating state, mirroring the operating-status map in
+/// `netmd-commands.ts:110`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackState {
+    Ready,
+    Playing,
+    Paused,
+    FastForward,
+    Rewind,
+    ReadingToc,
+    NoDisc,
+    DiscBlank,
+    ReadyForTransfer,
+    Unknown(u16),
+}
+
+impl PlaybackState {
+    /// Maps a raw 16-bit operating-status value to a [`PlaybackState`].
+    /// Values mirror `netmd-commands.ts:110`.
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            50687 => PlaybackState::Ready,
+            50037 => PlaybackState::Playing,
+            50045 => PlaybackState::Paused,
+            49983 => PlaybackState::FastForward,
+            49999 => PlaybackState::Rewind,
+            65315 => PlaybackState::ReadingToc,
+            65296 => PlaybackState::NoDisc,
+            65535 => PlaybackState::DiscBlank,
+            65319 => PlaybackState::ReadyForTransfer,
+            other => PlaybackState::Unknown(other),
+        }
+    }
+}
+
+/// Position/time within the currently selected track. `minute` is the absolute
+/// minute count (`hour * 60 + minute` from the device's `[track,h,m,s,f]`),
+/// matching the derivation in `netmd-commands.ts:146`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaybackTime {
+    pub minute: u32,
+    pub second: u32,
+    pub frame: u32,
+}
+
+/// A comprehensive playback status snapshot. Mirrors `DeviceStatus`
+/// (`netmd-commands.ts:124`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceStatus {
+    pub disc_present: bool,
+    pub state: PlaybackState,
+    pub track: Option<u32>,
+    pub time: Option<PlaybackTime>,
+}
+
 pub const FRAME_SIZE: &[(Wireformat, usize)] = &[
     (Wireformat::Pcm, 2048),
     (Wireformat::Lp2, 192),

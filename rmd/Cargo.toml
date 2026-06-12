@@ -12,3 +12,6 @@ netmd = { path = "../netmd" }
 anyhow = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+rusb = { workspace = true }

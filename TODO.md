@@ -25,8 +25,8 @@ Items marked ~~strikethrough~~ are already implemented in Rust.
 - [ ] `NetMDLevel` — `level1(0x20), level2(0x50), level3(0x70)`
 
 ### Internal Enums (netmd-interface.ts:27–37)
-- [ ] `Action` — `play(0x75), pause(0x7d), fastForward(0x39), rewind(0x49)`
-- [ ] `Track` — `previous(0x0002), next(0x8001), restart(0x0001)`
+- [x] `Action` — `play(0x75), pause(0x7d), fastForward(0x39), rewind(0x49)` (playback.rs)
+- [x] `Track` — `previous(0x0002), next(0x8001), restart(0x0001)` (playback.rs)
 
 ### Constants
 - [ ] `FrameSize` dict — pcm:2048, lp2:192, l105kbps:152, lp4:96
@@ -71,21 +71,21 @@ Items marked ~~strikethrough~~ are already implemented in Rust.
 - [ ] `isDiscPresent()`
 - [ ] `getFullOperatingStatus()`
 - [ ] `getOperatingStatus()`
-- [ ] `_getPlaybackStatus(p1, p2)`
-- [ ] `getPlaybackStatus1()` / `getPlaybackStatus2()`
-- [ ] `getPosition()` — track position in `[track, hour, minute, second, frame]`
+- [x] `_getPlaybackStatus(p1, p2)` (playback.rs)
+- [x] `getPlaybackStatus1()` / `getPlaybackStatus2()` (playback.rs)
+- [x] `getPosition()` — track position in `[track, hour, minute, second, frame]` (playback.rs; returns None on reject)
 
 ### Playback Control
-- [ ] `_play(action)` — `18c3 ff {action} 000000`
-- [ ] `play()` / `pause()` / `fast_forward()` / `rewind()`
-- [ ] `stop()` — `18c5 ff 00000000`
-- [ ] `gotoTrack(track)` — `1850 ff010000 0000 {track}`
-- [ ] `gotoTime(track, h, m, s, f)` — `1850 ff000000 0000 {track} {h}{m}{s}{f}`
-- [ ] `_trackChange(direction)` — `1850 ff10 00000000 {direction}`
-- [ ] `nextTrack()` / `previousTrack()` / `restartTrack()`
+- [x] `_play(action)` — `18c3 ff {action} 000000` (playback.rs)
+- [x] `play()` / `pause()` / `fast_forward()` / `rewind()` (playback.rs)
+- [x] `stop()` — `18c5 ff 00000000` (playback.rs; errors swallowed)
+- [x] `gotoTrack(track)` — `1850 ff010000 0000 {track}` (playback.rs)
+- [x] `gotoTime(track, h, m, s, f)` — `1850 ff000000 0000 {track} {h}{m}{s}{f}` (playback.rs)
+- [x] `_trackChange(direction)` — `1850 ff10 00000000 {direction}` (playback.rs)
+- [x] `nextTrack()` / `previousTrack()` / `restartTrack()` (playback.rs)
 
 ### Disc Operations
-- [ ] `ejectDisc()` / `canEjectDisc()` — `18c1 ff 6000`
+- [x] `ejectDisc()` / `canEjectDisc()` — `18c1 ff 6000` (playback.rs)
 - [ ] `eraseDisc()` — `1840 ff 0000`
 - [ ] `eraseTrack(track)` — `1840 ff01 00 201001 {track}`
 - [ ] `moveTrack(source, dest)` — `1843 ff00 00 201001 {s} 201001 {d}`
@@ -102,7 +102,7 @@ Items marked ~~strikethrough~~ are already implemented in Rust.
 - [ ] `getTrackLength(track)`
 - [ ] `getTrackEncoding(track)`
 - [ ] `getTrackFlags(track)`
-- [ ] `getRecordingParameters()`
+- [x] `getRecordingParameters()` (playback.rs)
 
 ### Metadata Writes
 - [ ] `setDiscTitle(title, wchar)` — `1807 02201801 00{wc} 3000 0a00 5000 {new} 0000 {old} {sjis}`
@@ -203,7 +203,7 @@ All commands use the `1800 080046 f0030103` prefix.
 
 ### Disc Content
 - [ ] `listContent(mdIface)` — full disc enumeration (title, groups, tracks, capacity)
-- [ ] `getDeviceStatus(mdIface)` — comprehensive status snapshot
+- [x] `getDeviceStatus(mdIface)` — comprehensive status snapshot (commands.rs)
 - [ ] `countTracksInDisc(disc)` / `getTracks(disc)` — helper accessors
 
 ### Title Management
@@ -283,9 +283,9 @@ All commands use the `1800 080046 f0030103` prefix.
 ## CLI (cli.ts)
 
 - [ ] `devices` — list devices
-- [ ] `status [readIntervalMS]` — live status display
-- [ ] `command [cmd]` — play/stop/next/prev/eject
-- [ ] `goto [track]` — seek to track
+- [x] `status` — status snapshot (`rmd status`); live display via `rmd control` TUI
+- [x] `command [cmd]` — play/stop/next/prev/eject (`rmd play|pause|stop|next|prev|ff|rewind|eject`)
+- [x] `goto [track]` — seek to track (`rmd goto <track>`, 1-based)
 - [ ] `ll [hex]` — raw hex query
 - [ ] `wipe` — erase disc
 - [ ] `ls` — list disc content
