@@ -94,7 +94,7 @@ fn remove_diacritics(c: char) -> String {
         .collect()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum MarkType {
     Normal,
     Dakuten,

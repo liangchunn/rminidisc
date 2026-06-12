@@ -13,7 +13,7 @@ impl From<Query> for Vec<u8> {
 /// builder instead — each method appends bytes in big-endian order, matching the
 /// `FORMAT_TYPE_LEN_DICT` behaviour. Use [`QueryBuilder::raw`] for the static hex
 /// portions of a command.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct QueryBuilder(Vec<u8>);
 
 impl QueryBuilder {

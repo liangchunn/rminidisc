@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -243,25 +244,26 @@ pub fn send_track<T: UsbContext>(
     sleep(Duration::from_millis(200));
 
     let mut written_bytes: u64 = 0;
+    let mut first_buf;
     for (i, packet) in packets.iter().enumerate() {
         if let Some(cb) = progress.as_deref_mut() {
             cb(written_bytes, total_bytes);
         }
-        let binpack = if i == 0 {
+        let binpack: &[u8] = if i == 0 {
             // First packet header: 4 zero bytes, then the packed length as a
             // big-endian u32 (`sendTrack` reverses the LE buffer on LE hosts -
             // netmd-interface.ts:871), then key, iv, data.
-            let mut buf = Vec::with_capacity(24 + packet.data.len());
-            buf.extend_from_slice(&[0, 0, 0, 0]);
-            buf.extend_from_slice(&pkt_size.to_be_bytes());
-            buf.extend_from_slice(&packet.key);
-            buf.extend_from_slice(&packet.iv);
-            buf.extend_from_slice(&packet.data);
-            buf
+            first_buf = Vec::with_capacity(24 + packet.data.len());
+            first_buf.extend_from_slice(&[0, 0, 0, 0]);
+            first_buf.extend_from_slice(&pkt_size.to_be_bytes());
+            first_buf.extend_from_slice(&packet.key);
+            first_buf.extend_from_slice(&packet.iv);
+            first_buf.extend_from_slice(&packet.data);
+            &first_buf
         } else {
-            packet.data.clone()
+            &packet.data
         };
-        write_bulk(handle, &binpack)?;
+        write_bulk(handle, binpack)?;
         written_bytes += packet.data.len() as u64;
     }
     if let Some(cb) = progress {
@@ -281,10 +283,10 @@ pub fn send_track<T: UsbContext>(
     let encrypted_reply = data[1];
 
     // Decrypt the reply with DES-CBC (zero IV) under the session key.
-    let decrypted = if encrypted_reply.len() % 8 == 0 && !encrypted_reply.is_empty() {
-        crypto::des_cbc_decrypt(session_key, &[0u8; 8], encrypted_reply)
+    let decrypted: Cow<[u8]> = if encrypted_reply.len() % 8 == 0 && !encrypted_reply.is_empty() {
+        Cow::Owned(crypto::des_cbc_decrypt(session_key, &[0u8; 8], encrypted_reply))
     } else {
-        encrypted_reply.to_vec()
+        Cow::Borrowed(encrypted_reply)
     };
     let uuid = hex_string(decrypted.get(0..8).unwrap_or(&[]));
     let content_id = hex_string(decrypted.get(12..32).unwrap_or(&[]));

@@ -50,11 +50,10 @@ pub fn get_track_count<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Resul
 
     let data = reply.scan("%? 1806 02101001 %?%? %?%? 1000 00%?0000 0006 0010000200%b")?;
 
-    let track_count = if let [tc] = &data[..] {
-        parse_u8(tc)?
-    } else {
-        unreachable!()
+    let [tc] = &data[..] else {
+        anyhow::bail!("unexpected scan result count");
     };
+    let track_count = parse_u8(tc)?;
     change_descriptor_state(handle, Descriptor::AudioContentsTd, DescriptorAction::Close)?;
     Ok(track_count)
 }

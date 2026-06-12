@@ -53,22 +53,20 @@ pub fn get_disk_title<T: UsbContext>(
                 &reply.0,
             )?;
 
-            if let [cz, t, d] = &data[..] {
-                chunk_size = parse_u16(cz)?;
-                total = parse_u16(t)?;
-                sink.push(parse_string(d)?);
-            } else {
-                unreachable!()
-            }
+            let [cz, t, d] = &data[..] else {
+                anyhow::bail!("unexpected scan result count");
+            };
+            chunk_size = parse_u16(cz)?;
+            total = parse_u16(t)?;
+            sink.push(parse_string(d)?);
             chunk_size -= 6;
         } else {
             let data = reply.scan("%? 1806 02201801 00%? 3000 0a00 1000 %w%?%? %*")?;
-            if let [cz, d] = &data[..] {
-                chunk_size = parse_u16(cz)?;
-                sink.push(parse_string(d)?);
-            } else {
-                unreachable!()
-            }
+            let [cz, d] = &data[..] else {
+                anyhow::bail!("unexpected scan result count");
+            };
+            chunk_size = parse_u16(cz)?;
+            sink.push(parse_string(d)?);
         }
         done += chunk_size;
         remaining = total - done;

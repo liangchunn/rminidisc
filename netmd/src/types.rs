@@ -107,6 +107,7 @@ pub struct DiscFlags {
 }
 
 impl DiscFlags {
+    #[must_use]
     pub const fn from_bits(raw: u8) -> Self {
         Self { raw }
     }
@@ -154,6 +155,7 @@ pub enum OperatingStatus {
 }
 
 impl OperatingStatus {
+    #[must_use]
     pub const fn raw(self) -> u16 {
         match self {
             OperatingStatus::Ready => 0xc5ff,
@@ -182,6 +184,7 @@ pub enum PlaybackState {
 impl PlaybackState {
     /// Maps a raw 16-bit operating-status value to a [`PlaybackState`].
     /// Values mirror `netmd-commands.ts:110`.
+    #[must_use]
     pub fn from_u16(value: u16) -> Self {
         match value {
             50687 => PlaybackState::Ready,

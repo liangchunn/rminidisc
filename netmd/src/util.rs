@@ -5,7 +5,7 @@ pub fn parse_u16(buf: &[u8]) -> Result<u16, TryFromSliceError> {
 }
 
 pub fn parse_u8(buf: &[u8]) -> Result<u8, TryFromSliceError> {
-    Ok(u8::from_be_bytes(<[u8; 1]>::try_from(buf)?))
+    <[u8; 1]>::try_from(buf).map(|b| b[0])
 }
 
 pub fn parse_u32(buf: &[u8]) -> Result<u32, TryFromSliceError> {

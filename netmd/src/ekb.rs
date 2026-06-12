@@ -26,6 +26,7 @@ pub struct Ekb {
 /// Returns the open-source EKB. Mirrors `EKBOpenSource` (`netmd-ekb.ts:11`).
 ///
 /// `getEKBForDevice` in the JS reference selects this as the catch-all fallback.
+#[must_use]
 pub fn open_source_ekb() -> Ekb {
     Ekb {
         root_key: [
@@ -52,6 +53,7 @@ pub fn open_source_ekb() -> Ekb {
 }
 
 /// Returns the corrupted-deck EKB. Mirrors `CorruptedDeckEKB` (`netmd-ekb.ts`).
+#[must_use]
 pub fn corrupted_deck_ekb() -> Ekb {
     Ekb {
         root_key: [

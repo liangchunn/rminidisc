@@ -9,7 +9,7 @@ pub const SONY_VENDOR_ID: u16 = 0x054c;
 /// Sharp USB vendor ID. Sharp devices need a different disc-title descriptor flow.
 pub const SHARP_VENDOR_ID: u16 = 0x04dd;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceFlags {
     pub native_mono_upload: bool,
     pub native_lp_encoding: bool,
@@ -31,7 +31,7 @@ impl DeviceFlags {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceDefinition {
     pub vendor_id: u16,
     pub product_id: u16,
@@ -324,7 +324,7 @@ pub const SUPPORTED_DEVICES: &[DeviceDefinition] = &[
     },
 ];
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeviceSelector {
     pub vendor_id: u16,
     pub product_id: u16,
