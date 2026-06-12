@@ -11,9 +11,9 @@ use std::process::Command as ProcCommand;
 
 use anyhow::{bail, Context};
 use clap::{Args, Parser, Subcommand};
-use log::info;
 use lofty::prelude::*;
 use lofty::read_from_path;
+use log::info;
 use netmd::track::MdTrack;
 use netmd::wav;
 use netmd::Wireformat;
@@ -130,16 +130,17 @@ fn main() -> anyhow::Result<()> {
     if matches!(cli.command, Some(Command::Control)) {
         return tui::run(cli.device);
     }
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     match cli.command.unwrap_or(Command::Info) {
         Command::Info => cmd_info(cli.device),
         Command::Upload(args) => cmd_upload(args, cli.device),
         Command::Erase { target } => cmd_erase(target, cli.device),
-        Command::Rename { target, title, full } => cmd_rename(target, title, full, cli.device),
+        Command::Rename {
+            target,
+            title,
+            full,
+        } => cmd_rename(target, title, full, cli.device),
         Command::MoveTrack { from, to } => cmd_move(from, to, cli.device),
         Command::Play => cmd_transport("play", cli.device),
         Command::Pause => cmd_transport("pause", cli.device),
@@ -314,11 +315,7 @@ fn cmd_rename(
     Ok(())
 }
 
-fn cmd_move(
-    from: u16,
-    to: u16,
-    device: Option<netmd::DeviceSelector>,
-) -> anyhow::Result<()> {
+fn cmd_move(from: u16, to: u16, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     let source = parse_track_index(&from.to_string())?;
     let dest = parse_track_index(&to.to_string())?;
 
@@ -366,10 +363,7 @@ fn cmd_status(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         None => info!("track: -"),
     }
     match status.time {
-        Some(t) => info!(
-            "time: {:02}:{:02}+{:03}",
-            t.minute, t.second, t.frame
-        ),
+        Some(t) => info!("time: {:02}:{:02}+{:03}", t.minute, t.second, t.frame),
         None => info!("time: -"),
     }
     netmd::close_device(&handle)?;
@@ -507,10 +501,7 @@ fn upload_folder<T: UsbContext>(
     Ok(())
 }
 
-fn cmd_upload(
-    args: UploadArgs,
-    device: Option<netmd::DeviceSelector>,
-) -> anyhow::Result<()> {
+fn cmd_upload(args: UploadArgs, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     if args.file.is_none() && args.folder.is_none() {
         bail!("upload requires an input file, or --folder for a directory");
     }
@@ -618,7 +609,8 @@ fn temp_path(ext: &str) -> String {
 }
 
 fn run_ffmpeg(args: &[&str]) -> anyhow::Result<()> {
-    let status = ProcCommand::new("ffmpeg")
+    let bin = std::env::var("FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
+    let status = ProcCommand::new(&bin)
         .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -632,8 +624,7 @@ fn run_ffmpeg(args: &[&str]) -> anyhow::Result<()> {
 
 fn run_atracdenc(args: &[&str]) -> anyhow::Result<()> {
     // Prefer an ATRACDENC env override, else the in-tree arm64 build.
-    let bin = std::env::var("ATRACDENC")
-        .unwrap_or_else(|_| "atracdenc/build-arm64/src/atracdenc".to_string());
+    let bin = std::env::var("ATRACDENC").unwrap_or_else(|_| "atracdenc".to_string());
     let status = ProcCommand::new(&bin)
         .args(args)
         .stdout(std::process::Stdio::null())
