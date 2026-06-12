@@ -5,6 +5,14 @@
 //!   rmd info          — same as above
 //!   rmd upload <file> [--format sp|lp2|lp105|lp4] [--title T]
 //!                     — encode (if needed) and write a track to the device
+//!   rmd erase [<track> | disc]
+//!                     — erase a single track (1-based, as shown by `info`),
+//!                       or the whole disc when given `disc` or no argument
+//!   rmd rename <track> <title> [--full]
+//!                     — set a track's title (1-based); `--full` writes the
+//!                       full-width title field
+//!   rmd move <from> <to>
+//!                     — reorder a track (1-based indexes)
 //!
 //! Device interaction is delegated to the `netmd` crate; this binary only does
 //! argument parsing and host-side audio preparation (ffmpeg / atracdenc).
@@ -25,11 +33,30 @@ fn main() -> anyhow::Result<()> {
     match args.get(1).map(String::as_str) {
         None | Some("info") => cmd_info(),
         Some("upload") => cmd_upload(&args[2..]),
-        Some("erase") => cmd_erase(),
+        Some("erase") => cmd_erase(&args[2..]),
+        Some("rename") => cmd_rename(&args[2..]),
+        Some("move") => cmd_move(&args[2..]),
         Some(other) => {
-            bail!("unknown command {other:?}. usage: rmd [info | upload <file> [--format F] [--title T] | erase]")
+            bail!(
+                "unknown command {other:?}. usage: rmd [info | \
+                 upload <file> [--format F] [--title T] | \
+                 erase [<track> | disc] | \
+                 rename <track> <title> [--full] | \
+                 move <from> <to>]"
+            )
         }
     }
+}
+
+/// Parses a 1-based track index (as shown by `info`) into a 0-based `u16`.
+fn parse_track_index(s: &str) -> anyhow::Result<u16> {
+    let n: u32 = s
+        .parse()
+        .with_context(|| format!("invalid track number {s:?}"))?;
+    if n == 0 {
+        bail!("track numbers are 1-based (as shown by `info`)");
+    }
+    u16::try_from(n - 1).context("track number out of range")
 }
 
 fn cmd_info() -> anyhow::Result<()> {
@@ -91,10 +118,66 @@ fn cmd_info() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_erase() -> anyhow::Result<()> {
+fn cmd_erase(args: &[String]) -> anyhow::Result<()> {
+    let target = args.first().map(String::as_str);
+    if args.len() > 1 {
+        bail!("usage: rmd erase [<track> | disc]");
+    }
+
     let handle = netmd::open_device()?;
-    netmd::erase_disc(&handle)?;
-    info!("disc erased");
+    match target {
+        None | Some("disc") => {
+            netmd::erase_disc(&handle)?;
+            info!("disc erased");
+        }
+        Some(s) => {
+            let track = parse_track_index(s)?;
+            netmd::erase_track(&handle, track)?;
+            info!("erased track #{}", track + 1);
+        }
+    }
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+fn cmd_rename(args: &[String]) -> anyhow::Result<()> {
+    let mut track: Option<u16> = None;
+    let mut title: Option<String> = None;
+    let mut full = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--full" => full = true,
+            other if track.is_none() => track = Some(parse_track_index(other)?),
+            other if title.is_none() => title = Some(other.to_string()),
+            other => bail!("unexpected argument {other:?}"),
+        }
+    }
+
+    let track = track.context("usage: rmd rename <track> <title> [--full]")?;
+    let title = title.context("usage: rmd rename <track> <title> [--full]")?;
+
+    let handle = netmd::open_device()?;
+    netmd::set_track_title(&handle, track, &title, full)?;
+    info!(
+        "renamed track #{} to {title:?}{}",
+        track + 1,
+        if full { " (full-width)" } else { "" }
+    );
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+fn cmd_move(args: &[String]) -> anyhow::Result<()> {
+    if args.len() != 2 {
+        bail!("usage: rmd move <from> <to>");
+    }
+    let source = parse_track_index(&args[0])?;
+    let dest = parse_track_index(&args[1])?;
+
+    let handle = netmd::open_device()?;
+    netmd::move_track(&handle, source, dest)?;
+    info!("moved track #{} -> #{}", source + 1, dest + 1);
     netmd::close_device(&handle)?;
     Ok(())
 }
