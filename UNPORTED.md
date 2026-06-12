@@ -39,55 +39,47 @@ tests but has not been exercised against real Sharp hardware in this repository.
 
 ---
 
-## 3. Secure Upload / Download Pipeline (Phase 8/9 — deferred by decision)
+## 3. Secure Upload / Download Pipeline
 
-The entire track-write (download-to-device) and track-read (upload-from-device)
-pipeline. Reference: `netmd-interface.ts:709-912`, `MDTrack`/`MDSession`
-(`netmd-interface.ts:944-1153`), `netmd-ekb.ts`, `encrypt-generator.ts`.
+### Download-to-device (track-write) — PORTED ✅
 
-### 3a. USB Bulk Transfers (prerequisite)
+The track-write (download-to-device) pipeline is now implemented and verified on
+the MZ-N505 for SP, LP2, and LP4. Reference: `netmd-interface.ts:709-912`,
+`MDTrack`/`MDSession` (`netmd-interface.ts:944-1153`), `netmd-ekb.ts`,
+`encrypt-generator.ts`.
 
-Not yet implemented in Rust. Needed by `saveTrackToArray` (read) and `sendTrack`
-(write).
+Rust locations:
 
-- `readBulk(length, chunksize=0x10000, callback)` — `netmd.ts:211`
-- `writeBulk(data)` — bulk OUT endpoint
-- Endpoints: bulk IN `0x81`? / bulk OUT `0x02`? — confirm via descriptor.
-  In `rusb` use `read_bulk` / `write_bulk` on the claimed interface endpoints.
+- Crypto (`retailmac`, DES-CBC/ECB, TripleDES-CBC, packet encryptor) — `netmd/src/crypto.rs`
+- EKB (`EKBOpenSource` only) — `netmd/src/ekb.rs`
+- Query builder (`formatQuery` equivalent) — `netmd/src/query.rs` (`QueryBuilder`)
+- Secure session commands + `write_bulk` + `send_track` + `prepare_download` — `netmd/src/lib.rs`
+- `MdTrack` / `download_track` orchestration — `netmd/src/track.rs`
+- WAV/ATRAC3 detection + data prep — `netmd/src/wav.rs`, `rmd/src/main.rs`
+  (`rmd upload <file> [--format sp|lp2|lp105|lp4] [--title T]`)
 
-### 3b. Crypto (prerequisite)
+Notable protocol details discovered during porting:
 
-No DES crate is currently a dependency. Needs `des` + `cbc`/`ecb` (RustCrypto).
+- Secure commands need the leading `00` status/pad byte (added by
+  `NetMDInterface.sendCommand`, `netmd.ts:226`); `SECURE_PREFIX` includes it.
+- The first bulk packet's `pktSize` header is **big-endian** (`sendTrack`
+  reverses the LE buffer on LE hosts, `netmd-interface.ts:871`).
+- Every reply read must be followed by a trailing `getReplyLength` poll
+  (`netmd.ts:206`). This is required for the device's flow control after the
+  bulk transfer — without it the device never produces the final `sendTrack`
+  reply. Implemented in `read_reply` + `read_reply_after_bulk`.
 
-- `retailmac(key, value, iv)` — DES-CBC then TripleDES-CBC MAC
-  (`netmd-interface.ts:915`). Used to derive the session key.
-- DES-CBC packet encryption (per-frame) — `MDTrack.getPacketIterator`
-  (`netmd-interface.ts:1036`).
-- DES-ECB for `commitTrack` authentication (`netmd-interface.ts:826`).
-- DES-CBC `NoPadding` for `setupDownload` content-id+kek encryption
-  (`netmd-interface.ts:810`).
+### Track-read (upload-from-device) — STILL DEFERRED ❌
 
-### 3c. EKB (Key Exchange Block)
+`saveTrackToArray` / `readBulk` (device → host) is **not** ported. It is
+hardware-restricted to the MZ-RH1 / MZ-M200 (`netmd-interface.ts:710`: "This can
+only be executed on an MZ-RH1 / M200") and cannot run on the MZ-N505. If a
+supported device is added later:
 
-`netmd-js/src/netmd-ekb.ts`:
+- `readBulk(length, chunksize=0x10000, callback)` — `netmd.ts:211`, bulk IN `0x81`.
+- `saveTrackToArray` — `netmd-interface.ts:709`.
 
-- `EKBOpenSource` — hardcoded root key, EKB ID, key chain, signature.
-- `CorruptedDeckEKB` — device-specific (MDS-JB980/JE780/NT1).
-- `getEKBForDevice(leafID, vid, pid)` — selection logic.
-
-### 3d. Secure Session Lifecycle (all prefix `1800 080046 f0030103`)
-
-`netmd-interface.ts`:
-
-- `getLeafID` (`11 ff`), `enterSecureSession` (`80 ff`),
-  `leaveSecureSession` (`81 ff`)
-- `sendKeyData(ekbid, keychain, depth, sig)` (`12 ff …`)
-- `sessionKeyExchange(hostnonce)` (`20 ff 000000 …`)
-- `sessionKeyForget` (`21 ff 000000`)
-- `setupDownload`, `disableNewTrackProtection`, `saveTrackToArray`,
-  `sendTrack`, `commitTrack`, `getTrackUUID`, `terminate`
-
-### 3e. HiMD Mode
+### HiMD Mode — DEFERRED (out of scope)
 
 - `enterHiMDMode` (`1800 080046 f0030104 82 ff`) — `netmd-interface.ts:741`
 - `getLeafID` HiMD variant

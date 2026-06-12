@@ -1,14 +1,38 @@
 //! `rmd` — thin runner over the `netmd` library.
 //!
-//! Currently dumps disc + track metadata read from the connected device. This
-//! will be refactored into a TUI later; all device interaction is delegated to
-//! the `netmd` crate.
+//! Commands:
+//!   rmd               — dump disc + track metadata (default)
+//!   rmd info          — same as above
+//!   rmd upload <file> [--format sp|lp2|lp105|lp4] [--title T]
+//!                     — encode (if needed) and write a track to the device
+//!
+//! Device interaction is delegated to the `netmd` crate; this binary only does
+//! argument parsing and host-side audio preparation (ffmpeg / atracdenc).
 
+use std::path::Path;
+use std::process::Command;
+
+use anyhow::{bail, Context};
 use log::info;
+use netmd::track::MdTrack;
+use netmd::wav;
+use netmd::Wireformat;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
 
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        None | Some("info") => cmd_info(),
+        Some("upload") => cmd_upload(&args[2..]),
+        Some("erase") => cmd_erase(),
+        Some(other) => {
+            bail!("unknown command {other:?}. usage: rmd [info | upload <file> [--format F] [--title T] | erase]")
+        }
+    }
+}
+
+fn cmd_info() -> anyhow::Result<()> {
     let handle = netmd::open_device()?;
 
     let title = netmd::get_disc_title(&handle, false)?;
@@ -64,6 +88,214 @@ fn main() -> anyhow::Result<()> {
     }
 
     netmd::close_device(&handle)?;
+    Ok(())
+}
 
+fn cmd_erase() -> anyhow::Result<()> {
+    let handle = netmd::open_device()?;
+    netmd::erase_disc(&handle)?;
+    info!("disc erased");
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+struct UploadArgs {
+    file: String,
+    format: String,
+    title: Option<String>,
+}
+
+fn parse_upload_args(args: &[String]) -> anyhow::Result<UploadArgs> {
+    let mut file: Option<String> = None;
+    let mut format = "sp".to_string();
+    let mut title: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--format" | "-f" => {
+                i += 1;
+                format = args.get(i).context("--format requires a value")?.clone();
+            }
+            "--title" | "-t" => {
+                i += 1;
+                title = Some(args.get(i).context("--title requires a value")?.clone());
+            }
+            other if !other.starts_with('-') => {
+                if file.is_none() {
+                    file = Some(other.to_string());
+                } else {
+                    bail!("unexpected argument {other:?}");
+                }
+            }
+            other => bail!("unknown option {other:?}"),
+        }
+        i += 1;
+    }
+
+    Ok(UploadArgs {
+        file: file.context("upload requires an input file")?,
+        format,
+        title,
+    })
+}
+
+fn cmd_upload(args: &[String]) -> anyhow::Result<()> {
+    let args = parse_upload_args(args)?;
+    let requested = args.format.to_lowercase();
+
+    let default_title = Path::new(&args.file)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("track")
+        .to_string();
+    let title = args.title.unwrap_or(default_title);
+
+    info!("preparing {:?} as {}", args.file, requested);
+    let (wireformat, data) = prepare_audio(&args.file, &requested)?;
+    info!(
+        "prepared {} bytes, wire format {:?}",
+        data.len(),
+        wireformat
+    );
+
+    let track = MdTrack {
+        title: title.clone(),
+        full_width_title: None,
+        format: wireformat,
+        data,
+    };
+
+    let handle = netmd::open_device()?;
+    let (vendor, product) = netmd::device_ids(&handle)?;
+
+    let mut last_pct = u64::MAX;
+    let mut progress = |written: u64, total: u64| {
+        let pct = if total > 0 { written * 100 / total } else { 0 };
+        if pct != last_pct {
+            info!("transferred {written} / {total} bytes ({pct}%)");
+            last_pct = pct;
+        }
+    };
+
+    let (track_num, uuid, ccid) = netmd::track::download_track(
+        &handle,
+        &track,
+        vendor,
+        product,
+        Some(&mut progress),
+    )?;
+
+    info!("uploaded track #{track_num} (uuid={uuid} ccid={ccid}) title={title:?}");
+
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+/// Prepares audio for upload, returning the wire format and raw payload.
+///
+/// - If the input is an ATRAC3 WAV, its payload is used directly (header
+///   stripped) and the requested format is ignored (the file dictates it).
+/// - SP: transcode to big-endian s16 PCM via ffmpeg.
+/// - LP2/LP105/LP4: transcode to a 44.1 kHz stereo WAV via ffmpeg, encode with
+///   atracdenc, then strip the resulting ATRAC3 WAV header.
+fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Vec<u8>)> {
+    let raw = std::fs::read(input).with_context(|| format!("reading {input}"))?;
+
+    // Already ATRAC3? Use it directly.
+    if let Some((fmt, payload)) = wav::atrac3_info(&raw) {
+        info!("input is ATRAC3 ({fmt:?}); using payload directly");
+        return Ok((fmt, payload.to_vec()));
+    }
+
+    match requested {
+        "sp" => {
+            // ffmpeg -i in -ac 2 -ar 44100 -f s16be out.raw
+            let out = temp_path("raw");
+            run_ffmpeg(&[
+                "-y", "-i", input, "-ac", "2", "-ar", "44100", "-f", "s16be", &out,
+            ])?;
+            let data = std::fs::read(&out)?;
+            let _ = std::fs::remove_file(&out);
+            Ok((Wireformat::Pcm, data))
+        }
+        "lp2" | "lp105" | "lp4" => {
+            // First make a clean 44.1k stereo WAV via ffmpeg.
+            let wav_in = temp_path("wav");
+            run_ffmpeg(&["-y", "-i", input, "-ar", "44100", "-ac", "2", "-f", "wav", &wav_in])?;
+
+            // Encode to ATRAC3 (RIFF container) via atracdenc.
+            let (codec, bitrate, wf) = match requested {
+                "lp2" => ("atrac3", "128", Wireformat::Lp2),
+                "lp105" => ("atrac3", "102", Wireformat::L105kbps),
+                "lp4" => ("atrac3_lp", "64", Wireformat::Lp4),
+                _ => unreachable!(),
+            };
+            let atrac_out = temp_path("at3.wav");
+            run_atracdenc(&[
+                "-e",
+                codec,
+                "-i",
+                &wav_in,
+                "-o",
+                &atrac_out,
+                "--container",
+                "riff",
+                "--bitrate",
+                bitrate,
+            ])?;
+
+            let encoded = std::fs::read(&atrac_out)?;
+            let _ = std::fs::remove_file(&wav_in);
+            let _ = std::fs::remove_file(&atrac_out);
+
+            let (detected, payload) = wav::atrac3_info(&encoded)
+                .context("atracdenc output was not a recognizable ATRAC3 WAV")?;
+            if detected != wf {
+                info!("note: atracdenc produced {detected:?}, requested {wf:?}");
+            }
+            Ok((detected, payload.to_vec()))
+        }
+        other => bail!("unknown format {other:?} (expected sp, lp2, lp105, lp4)"),
+    }
+}
+
+fn temp_path(ext: &str) -> String {
+    let dir = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    dir.join(format!("rmd_{nanos}.{ext}"))
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn run_ffmpeg(args: &[&str]) -> anyhow::Result<()> {
+    let status = Command::new("ffmpeg")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context("failed to run ffmpeg (is it installed?)")?;
+    if !status.success() {
+        bail!("ffmpeg failed with status {status}");
+    }
+    Ok(())
+}
+
+fn run_atracdenc(args: &[&str]) -> anyhow::Result<()> {
+    // Prefer an ATRACDENC env override, else the in-tree arm64 build.
+    let bin = std::env::var("ATRACDENC")
+        .unwrap_or_else(|_| "atracdenc/build-arm64/src/atracdenc".to_string());
+    let status = Command::new(&bin)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .with_context(|| format!("failed to run atracdenc at {bin}"))?;
+    if !status.success() {
+        bail!("atracdenc failed with status {status}");
+    }
     Ok(())
 }

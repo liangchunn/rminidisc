@@ -32,13 +32,17 @@ use crate::{
     },
 };
 
+pub mod crypto;
 pub mod descriptor;
+pub mod ekb;
 pub mod error;
 pub mod query;
 pub mod scan;
 pub mod title;
+pub mod track;
 pub mod types;
 pub mod util;
+pub mod wav;
 
 // --- Public re-exports for ergonomic access from downstream crates. ---
 // (The internal `use crate::descriptor::{...}` above already brings the
@@ -104,6 +108,13 @@ pub fn open_device() -> anyhow::Result<DeviceHandle<GlobalContext>> {
 pub fn close_device<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
     handle.release_interface(0)?;
     Ok(())
+}
+
+/// Returns the `(vendor_id, product_id)` of the device behind a handle. Used for
+/// EKB selection during secure download.
+pub fn device_ids<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<(u16, u16)> {
+    let desc = handle.device().device_descriptor()?;
+    Ok((desc.vendor_id(), desc.product_id()))
 }
 
 // TODO: to return concrete `.try_into()`` errors, use the return type:
@@ -802,7 +813,393 @@ pub fn read_reply<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<ReadRequest
 
     trace!("  RX ← {:02x?}", reply.0);
 
+    // Mirror `_readReply` (`netmd.ts:206`): refresh the reply-length register
+    // after reading the payload. Harmless for short commands and required for
+    // the device's flow control during the secure-download reply sequence.
+    let _ = read_reply_length(handle);
+
     Ok(reply)
+}
+
+/// Reads a reply after a long-running bulk transfer (track commit).
+///
+/// Unlike [`read_reply`], the reply-length poll here tolerates USB timeouts:
+/// the device can take several seconds to finalize the track before it produces
+/// a reply, during which the control-IN length read may time out. Each timeout
+/// is treated as "not ready yet" and retried up to an overall budget.
+fn read_reply_after_bulk<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+) -> Result<ReadRequestData, NetMDError> {
+    const MAX_POLLS: u32 = 200; // ~ up to a minute with the sleeps below.
+    let mut polls = 0u32;
+    let header = loop {
+        match read_reply_length(handle) {
+            Ok(h) if h.len() > 0 => break h,
+            Ok(_) => {
+                // Not ready yet.
+            }
+            Err(rusb::Error::Timeout) => {
+                // Device still busy; keep polling.
+            }
+            Err(e) => return Err(NetMDError::Usb(e)),
+        }
+        polls += 1;
+        if polls >= MAX_POLLS {
+            return Err(NetMDError::Usb(rusb::Error::Timeout));
+        }
+        sleep(Duration::from_millis(200));
+    };
+
+    let mut reply = ReadRequestData::new(header.len());
+    handle.read_control(
+        request_type(
+            rusb::Direction::In,
+            rusb::RequestType::Vendor,
+            rusb::Recipient::Interface,
+        ),
+        0x81,
+        0,
+        0,
+        &mut reply.0,
+        Duration::from_millis(USB_TIMEOUT_MILLIS),
+    )?;
+    trace!("  RX ← {:02x?}", reply.0);
+    Ok(reply)
+}
+
+// ===========================================================================
+// Secure download (track-write) pipeline. Ported from `netmd-interface.ts`
+// secure-session methods + `MDSession`/`MDTrack`. Track-read (saveTrackToArray)
+// is intentionally NOT ported (RH1/M200-only hardware). See UNPORTED.md §3.
+// ===========================================================================
+
+use crate::crypto::EncryptedPacket;
+use crate::query::QueryBuilder;
+
+/// USB bulk OUT endpoint address for track data. WebUSB endpoint `0x02`
+/// (`netmd.ts:6`) maps to rusb endpoint address `0x02`.
+pub const BULK_WRITE_ENDPOINT: u8 = 0x02;
+
+/// Common command prefix for all secure-session commands.
+///
+/// The leading `00` is the status/command byte that `NetMDInterface.sendCommand`
+/// (`netmd.ts:226`) prepends to every query before the control write. The
+/// existing non-secure commands in this crate spell that byte out explicitly in
+/// their hex strings (e.g. `"00 1806 ..."`); the secure commands include it here
+/// so the device echoes back `1800 080046 ...` with the status replacing the
+/// leading `00`, matching the reply scan templates.
+const SECURE_PREFIX: &str = "00 1800 080046 f0030103";
+
+/// Maximum bytes per single bulk-OUT libusb call.
+///
+/// NOTE: this is a deliberate deviation from the JS reference. `NetMD.writeBulk`
+/// (`netmd.ts:231`) hands the entire packet to a single WebUSB `transferOut`
+/// call and lets the browser split it into endpoint-sized USB transactions.
+/// libusb/rusb does not do that splitting for us: a single multi-MB `write_bulk`
+/// (the first SP packet is ~1 MB, and the whole payload can be ~79 MB) stalls on
+/// some hosts (observed on macOS). We therefore split into `0x10000` pieces,
+/// matching the chunk size `readBulk` uses for reads (`netmd-interface.ts:714`).
+const BULK_WRITE_CHUNK: usize = 0x10000;
+
+/// Writes data to the bulk OUT endpoint. Mirrors `NetMD.writeBulk` (`netmd.ts:231`),
+/// except it splits the write into [`BULK_WRITE_CHUNK`]-sized libusb calls (see
+/// the constant's docs) so large SP payloads transfer reliably.
+pub fn write_bulk<T: UsbContext>(handle: &DeviceHandle<T>, data: &[u8]) -> anyhow::Result<()> {
+    let mut written = 0;
+    while written < data.len() {
+        let end = (written + BULK_WRITE_CHUNK).min(data.len());
+        let chunk = &data[written..end];
+        let mut off = 0;
+        while off < chunk.len() {
+            let n = handle.write_bulk(
+                BULK_WRITE_ENDPOINT,
+                &chunk[off..],
+                Duration::from_millis(USB_TIMEOUT_MILLIS * 20),
+            )?;
+            if n == 0 {
+                anyhow::bail!("bulk write made no progress");
+            }
+            off += n;
+        }
+        written += chunk.len();
+    }
+    Ok(())
+}
+
+/// Enters a secure session. Mirrors `enterSecureSession` (`netmd-interface.ts:729`).
+pub fn enter_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+    debug!("enter secure session");
+    let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("80 ff")?;
+    let reply = send_query(handle, query)?;
+    reply.scan("%? 1800 080046 f0030103 80 00")?;
+    Ok(())
+}
+
+/// Leaves a secure session. Mirrors `leaveSecureSession` (`netmd-interface.ts:735`).
+pub fn leave_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+    debug!("leave secure session");
+    let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("81 ff")?;
+    let reply = send_query(handle, query)?;
+    reply.scan("%? 1800 080046 f0030103 81 00")?;
+    Ok(())
+}
+
+/// Reads the device leaf ID. Mirrors `getLeafID` (`netmd-interface.ts:747`).
+pub fn get_leaf_id<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<Vec<u8>> {
+    debug!("get leaf id");
+    let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("11 ff")?;
+    let reply = send_query(handle, query)?;
+    let data = reply.scan("%? 1800 080046 f0030103 11 00 %*")?;
+    Ok(data[0].to_vec())
+}
+
+/// Sends the EKB key data. Mirrors `sendKeyData` (`netmd-interface.ts:754`).
+pub fn send_key_data<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    ekb_id: u32,
+    key_chain: &[[u8; 16]],
+    depth: u8,
+    signature: &[u8; 24],
+) -> anyhow::Result<()> {
+    debug!("send key data (ekb_id=0x{ekb_id:08x} depth={depth})");
+    if depth < 1 || depth > 63 {
+        anyhow::bail!("invalid EKB depth: {depth}");
+    }
+    let chain_len = key_chain.len() as u32;
+    let databytes = 16 + 16 * chain_len + 24;
+    let mut chain_bytes = Vec::with_capacity(16 * key_chain.len());
+    for k in key_chain {
+        chain_bytes.extend_from_slice(k);
+    }
+
+    // formatQuery('… 12 ff %w 0000 %w %d %d %d 00000000 %* %*',
+    //   databytes, databytes, chainlen, depth, ekbid, keychains, ekbsignature)
+    let query = QueryBuilder::new()
+        .raw(SECURE_PREFIX)?
+        .raw("12 ff")?
+        .u16(databytes as u16)
+        .raw("0000")?
+        .u16(databytes as u16)
+        .u32(chain_len)
+        .u32(depth as u32)
+        .u32(ekb_id)
+        .raw("00000000")?
+        .bytes(&chain_bytes)
+        .bytes(signature);
+    let reply = send_query(handle, query)?;
+    reply.scan("%? 1800 080046 f0030103 12 01 %?%? %?%?%?%?")?;
+    Ok(())
+}
+
+/// Performs session key exchange. Mirrors `sessionKeyExchange` (`netmd-interface.ts:783`).
+/// Returns the 8-byte device nonce.
+pub fn session_key_exchange<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    host_nonce: &[u8; 8],
+) -> anyhow::Result<[u8; 8]> {
+    debug!("session key exchange");
+    let query = QueryBuilder::new()
+        .raw(SECURE_PREFIX)?
+        .raw("20 ff 000000")?
+        .bytes(host_nonce);
+    let reply = send_query(handle, query)?;
+    // '20 %?' instead of '20 00' (Panasonic fix); %# = consume-to-end.
+    let data = reply.scan("%? 1800 080046 f0030103 20 %? 000000 %#")?;
+    let dev_nonce: [u8; 8] = data[0]
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("device nonce wrong length"))?;
+    Ok(dev_nonce)
+}
+
+/// Forgets the session key. Mirrors `sessionKeyForget` (`netmd-interface.ts:792`).
+pub fn session_key_forget<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+    debug!("session key forget");
+    let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("21 ff 000000")?;
+    let reply = send_query(handle, query)?;
+    reply.scan("%? 1800 080046 f0030103 21 00 000000")?;
+    Ok(())
+}
+
+/// Sets up a download. Mirrors `setupDownload` (`netmd-interface.ts:798`).
+///
+/// Encrypts `[1,1,1,1] + content_id(20) + kek(8)` with DES-CBC (NoPadding, zero
+/// IV) under the session key, then sends it.
+pub fn setup_download<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    content_id: &[u8; 20],
+    kek: &[u8; 8],
+    session_key: &[u8; 8],
+) -> anyhow::Result<()> {
+    debug!("setup download");
+    let mut message = Vec::with_capacity(32);
+    message.extend_from_slice(&[1, 1, 1, 1]);
+    message.extend_from_slice(content_id);
+    message.extend_from_slice(kek);
+    let encrypted = crypto::des_cbc_encrypt(session_key, &[0u8; 8], &message);
+
+    let query = QueryBuilder::new()
+        .raw(SECURE_PREFIX)?
+        .raw("22 ff 0000")?
+        .bytes(&encrypted);
+    let reply = send_query(handle, query)?;
+    reply.scan("%? 1800 080046 f0030103 22 00 0000")?;
+    Ok(())
+}
+
+/// Disables new-track copy protection. Mirrors `disableNewTrackProtection`
+/// (`netmd-interface.ts:723`).
+pub fn disable_new_track_protection<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    val: u16,
+) -> anyhow::Result<()> {
+    debug!("disable new track protection ({val})");
+    let query = QueryBuilder::new()
+        .raw(SECURE_PREFIX)?
+        .raw("2b ff")?
+        .u16(val);
+    let reply = send_query(handle, query)?;
+    reply.scan("%? 1800 080046 f0030103 2b 00 %?%?")?;
+    Ok(())
+}
+
+/// Commits a track after upload. Mirrors `commitTrack` (`netmd-interface.ts:822`).
+///
+/// Authentication = DES-ECB encrypt of 8 zero bytes under the session key.
+pub fn commit_track<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    track: u16,
+    session_key: &[u8; 8],
+) -> anyhow::Result<()> {
+    debug!("commit track #{track}");
+    let authentication = crypto::des_ecb_encrypt(session_key, &[0u8; 8]);
+    let query = QueryBuilder::new()
+        .raw(SECURE_PREFIX)?
+        .raw("48 ff 00 1001")?
+        .u16(track)
+        .bytes(&authentication);
+    let reply = send_query(handle, query)?;
+    reply.scan("%? 1800 080046 f0030103 48 00 00 1001 %?%?")?;
+    Ok(())
+}
+
+/// Terminates the secure session lifecycle. Mirrors `terminate` (`netmd-interface.ts:909`).
+pub fn terminate<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+    debug!("terminate");
+    let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("2a ff00")?;
+    // JS does not scan the reply.
+    send_query(handle, query)?;
+    Ok(())
+}
+
+/// Sends an encrypted track over the bulk endpoint. Mirrors `sendTrack`
+/// (`netmd-interface.ts:839`).
+///
+/// Returns `(track_number, uuid_hex, content_id_hex)`.
+#[allow(clippy::too_many_arguments)]
+pub fn send_track<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    wireformat: u8,
+    discformat: u8,
+    frames: u32,
+    pkt_size: u32,
+    packets: &[EncryptedPacket],
+    session_key: &[u8; 8],
+    mut progress: Option<&mut dyn FnMut(u64, u64)>,
+) -> anyhow::Result<(u16, String, String)> {
+    debug!("send track (wf=0x{wireformat:02x} df=0x{discformat:02x} frames={frames})");
+    // The sharps are slow...
+    sleep(Duration::from_millis(200));
+
+    let total_bytes: u64 = pkt_size as u64 + 24;
+
+    // 28 ff 000100 1001 ffff 00 %b %b %d %d
+    let query = QueryBuilder::new()
+        .raw(SECURE_PREFIX)?
+        .raw("28 ff 000100 1001 ffff 00")?
+        .u8(wireformat)
+        .u8(discformat)
+        .u32(frames)
+        .u32(total_bytes as u32);
+    // Accept the interim response.
+    let reply = send_query_ext(handle, query, true)?;
+    reply.scan("%? 1800 080046 f0030103 28 00 000100 1001 %?%? 00 %*")?;
+
+    sleep(Duration::from_millis(200));
+
+    let mut written_bytes: u64 = 0;
+    for (i, packet) in packets.iter().enumerate() {
+        if let Some(cb) = progress.as_deref_mut() {
+            cb(written_bytes, total_bytes);
+        }
+        let binpack = if i == 0 {
+            // First packet header: 4 zero bytes, then the packed length as a
+            // big-endian u32 (`sendTrack` reverses the LE buffer on LE hosts —
+            // netmd-interface.ts:871), then key, iv, data.
+            let mut buf = Vec::with_capacity(24 + packet.data.len());
+            buf.extend_from_slice(&[0, 0, 0, 0]);
+            buf.extend_from_slice(&pkt_size.to_be_bytes());
+            buf.extend_from_slice(&packet.key);
+            buf.extend_from_slice(&packet.iv);
+            buf.extend_from_slice(&packet.data);
+            buf
+        } else {
+            packet.data.clone()
+        };
+        write_bulk(handle, &binpack)?;
+        written_bytes += packet.data.len() as u64;
+    }
+    if let Some(cb) = progress.as_deref_mut() {
+        cb(written_bytes, total_bytes);
+    }
+
+    // Read the final reply. The device commits the track before replying, which
+    // can take several seconds, so poll the reply-length register tolerating
+    // USB timeouts rather than erroring on the first one.
+    let final_reply = read_reply_after_bulk(handle)?;
+    // Refresh the reply-length register (JS calls getReplyLength again).
+    let _ = read_reply_length(handle);
+
+    let data = final_reply.scan(
+        "%? 1800 080046 f0030103 28 00 000100 1001 %w 00 %?%? %?%?%?%? %?%?%?%? %*",
+    )?;
+    let track_number = parse_u16(data[0])?;
+    let encrypted_reply = data[1];
+
+    // Decrypt the reply with DES-CBC (zero IV) under the session key.
+    let decrypted = if encrypted_reply.len() % 8 == 0 && !encrypted_reply.is_empty() {
+        crypto::des_cbc_decrypt(session_key, &[0u8; 8], encrypted_reply)
+    } else {
+        encrypted_reply.to_vec()
+    };
+    let uuid = hex_string(decrypted.get(0..8).unwrap_or(&[]));
+    let content_id = hex_string(decrypted.get(12..32).unwrap_or(&[]));
+
+    Ok((track_number, uuid, content_id))
+}
+
+fn hex_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Waits until the device is ready/blank for a download, then acquires it and
+/// disables new-track protection. Mirrors `prepareDownload` (`netmd-commands.ts:444`).
+pub fn prepare_download<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+    debug!("prepare download");
+    // Wait for the device to be ready (0xC5FF) or disc blank (0xFFFF).
+    for _ in 0..50 {
+        match get_operating_status(handle) {
+            Ok(0xC5FF) | Ok(0xFFFF) => break,
+            _ => sleep(Duration::from_millis(200)),
+        }
+    }
+    // Best-effort: forget any prior session.
+    let _ = session_key_forget(handle);
+    let _ = leave_secure_session(handle);
+
+    acquire(handle)?;
+    // On Sharp devices this doesn't work; ignore errors.
+    let _ = disable_new_track_protection(handle, 1);
+    Ok(())
 }
 
 #[cfg(test)]
