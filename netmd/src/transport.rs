@@ -1,0 +1,255 @@
+use std::thread::sleep;
+use std::time::Duration;
+
+use log::trace;
+use rusb::{request_type, DeviceHandle, UsbContext};
+
+use crate::{
+    error::NetMDError,
+    query::Query,
+    types::{
+        ProtocolReply, ReadRequestData, ReadRequestHeader, INTERIM_RETRY_INTERVAL_MS,
+        MAX_INTERIM_ATTEMPTS, READ_REPLY_POLL_INTERVAL_MS, USB_TIMEOUT_MILLIS,
+    },
+};
+
+/// USB bulk OUT endpoint address for track data. WebUSB endpoint `0x02`
+/// (`netmd.ts:6`) maps to rusb endpoint address `0x02`.
+pub const BULK_WRITE_ENDPOINT: u8 = 0x02;
+
+/// Maximum bytes per single bulk-OUT libusb call.
+///
+/// NOTE: this is a deliberate deviation from the JS reference. `NetMD.writeBulk`
+/// (`netmd.ts:231`) hands the entire packet to a single WebUSB `transferOut`
+/// call and lets the browser split it into endpoint-sized USB transactions.
+/// libusb/rusb does not do that splitting for us: a single multi-MB `write_bulk`
+/// (the first SP packet is ~1 MB, and the whole payload can be ~79 MB) stalls on
+/// some hosts (observed on macOS). We therefore split into `0x10000` pieces,
+/// matching the chunk size `readBulk` uses for reads (`netmd-interface.ts:714`).
+const BULK_WRITE_CHUNK: usize = 0x10000;
+
+// TODO: to return concrete `.try_into()`` errors, use the return type:
+// TODO:    Result<ReadRequestData, M::Error>
+// TODO: and remove
+// TODO:    anyhow::Error: From<M::Error>
+pub fn send_query<T, M>(handle: &DeviceHandle<T>, message: M) -> anyhow::Result<ReadRequestData>
+where
+    T: UsbContext,
+    M: TryInto<Query>,
+    anyhow::Error: From<M::Error>,
+{
+    send_query_ext(handle, message, false)
+}
+
+/// Sends a command and reads the reply, performing protocol status checking.
+///
+/// Mirrors `NetMDInterface.sendQuery` + `readReply`:
+/// - The command is sent once via control transfer (request `0x80`).
+/// - The reply is read; if the status byte is interim (`0x0f`) and
+///   `accept_interim` is false, the read is retried with exponential backoff.
+/// - `0x08` maps to `NotImplemented`, `0x0a` to `Rejected`.
+pub fn send_query_ext<T, M>(
+    handle: &DeviceHandle<T>,
+    message: M,
+    accept_interim: bool,
+) -> anyhow::Result<ReadRequestData>
+where
+    T: UsbContext,
+    M: TryInto<Query>,
+    anyhow::Error: From<M::Error>,
+{
+    let query: Query = message.try_into()?;
+    trace!("  TX -> {:02x?}", query.0);
+    handle.write_control(
+        request_type(
+            rusb::Direction::Out,
+            rusb::RequestType::Vendor,
+            rusb::Recipient::Interface,
+        ),
+        0x80,
+        0,
+        0,
+        &query.0,
+        Duration::from_millis(USB_TIMEOUT_MILLIS),
+    )?;
+
+    let reply = read_reply_checked(handle, accept_interim)?;
+
+    Ok(reply)
+}
+
+/// Reads a reply, checking the protocol status byte and retrying on interim.
+///
+/// The status byte is the first byte of the reply payload. On success the
+/// status byte is left in place (callers strip it via scan `%?` templates).
+pub fn read_reply_checked<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    accept_interim: bool,
+) -> Result<ReadRequestData, NetMDError> {
+    let mut attempt: u32 = 0;
+    while attempt < MAX_INTERIM_ATTEMPTS {
+        let data = read_reply(handle)?;
+        let status: ProtocolReply = data
+            .0
+            .first()
+            .copied()
+            .ok_or(NetMDError::UnknownStatus(0))?
+            .into();
+
+        match status {
+            ProtocolReply::NotImplemented => return Err(NetMDError::NotImplemented),
+            ProtocolReply::Rejected => {
+                let hex = data
+                    .0
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>();
+                return Err(NetMDError::Rejected(hex));
+            }
+            ProtocolReply::Interim if !accept_interim => {
+                // Backoff: interval * (2^attempt - 1)
+                let factor = (1u64 << attempt) - 1;
+                sleep(Duration::from_millis(INTERIM_RETRY_INTERVAL_MS * factor));
+                attempt += 1;
+                continue;
+            }
+            ProtocolReply::Accepted
+            | ProtocolReply::Implemented
+            | ProtocolReply::Changed
+            | ProtocolReply::Interim => {
+                return Ok(data);
+            }
+            other => return Err(NetMDError::UnknownStatus(other as u8)),
+        }
+    }
+    Err(NetMDError::MaxInterimAttempts)
+}
+
+/// Reads the reply length header (request `0x01`). The third byte holds the
+/// payload length. Mirrors `NetMD.getReplyLength`.
+pub fn read_reply_length<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+) -> Result<ReadRequestHeader, rusb::Error> {
+    let mut reply_header = ReadRequestHeader::new();
+    handle.read_control(
+        request_type(
+            rusb::Direction::In,
+            rusb::RequestType::Vendor,
+            rusb::Recipient::Interface,
+        ),
+        0x01,
+        0,
+        0,
+        &mut reply_header.0,
+        Duration::from_millis(USB_TIMEOUT_MILLIS),
+    )?;
+    trace!("  RX <- {:02x?}", reply_header.0);
+    Ok(reply_header)
+}
+
+pub fn read_reply<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<ReadRequestData, rusb::Error> {
+    // header is 4 bytes, of which the third byte is the length of the next message.
+    // Poll until a non-zero length is reported, doubling the wait each attempt.
+    let mut reply_header = read_reply_length(handle)?;
+    let mut i: u32 = 0;
+    while reply_header.is_empty() {
+        sleep(Duration::from_millis(READ_REPLY_POLL_INTERVAL_MS << i));
+        reply_header = read_reply_length(handle)?;
+        i += 1;
+    }
+
+    let mut reply = ReadRequestData::new(reply_header.len());
+
+    handle.read_control(
+        request_type(
+            rusb::Direction::In,
+            rusb::RequestType::Vendor,
+            rusb::Recipient::Interface,
+        ),
+        0x81,
+        0,
+        0,
+        &mut reply.0,
+        Duration::from_millis(USB_TIMEOUT_MILLIS),
+    )?;
+
+    trace!("  RX <- {:02x?}", reply.0);
+
+    // Mirror `_readReply` (`netmd.ts:206`): refresh the reply-length register
+    // after reading the payload. Harmless for short commands and required for
+    // the device's flow control during the secure-download reply sequence.
+    let _ = read_reply_length(handle);
+
+    Ok(reply)
+}
+
+/// Reads a reply after a long-running bulk transfer (track commit).
+///
+/// Unlike [`read_reply`], the reply-length poll here tolerates USB timeouts:
+/// the device can take several seconds to finalize the track before it produces
+/// a reply, during which the control-IN length read may time out. Each timeout
+/// is treated as "not ready yet" and retried up to an overall budget.
+pub(crate) fn read_reply_after_bulk<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+) -> Result<ReadRequestData, NetMDError> {
+    const MAX_POLLS: u32 = 200; // ~ up to a minute with the sleeps below.
+    let mut polls = 0u32;
+    let header = loop {
+        match read_reply_length(handle) {
+            Ok(h) if !h.is_empty() => break h,
+            Ok(_) => {
+                // Not ready yet.
+            }
+            Err(rusb::Error::Timeout) => {
+                // Device still busy; keep polling.
+            }
+            Err(e) => return Err(NetMDError::Usb(e)),
+        }
+        polls += 1;
+        if polls >= MAX_POLLS {
+            return Err(NetMDError::Usb(rusb::Error::Timeout));
+        }
+        sleep(Duration::from_millis(200));
+    };
+
+    let mut reply = ReadRequestData::new(header.len());
+    handle.read_control(
+        request_type(
+            rusb::Direction::In,
+            rusb::RequestType::Vendor,
+            rusb::Recipient::Interface,
+        ),
+        0x81,
+        0,
+        0,
+        &mut reply.0,
+        Duration::from_millis(USB_TIMEOUT_MILLIS),
+    )?;
+    trace!("  RX <- {:02x?}", reply.0);
+    Ok(reply)
+}
+
+/// Writes data to the bulk OUT endpoint. Mirrors `NetMD.writeBulk` (`netmd.ts:231`),
+/// except it splits the write into [`BULK_WRITE_CHUNK`]-sized libusb calls (see
+/// the constant's docs) so large SP payloads transfer reliably.
+pub fn write_bulk<T: UsbContext>(handle: &DeviceHandle<T>, data: &[u8]) -> anyhow::Result<()> {
+    let mut written = 0;
+    while written < data.len() {
+        let end = (written + BULK_WRITE_CHUNK).min(data.len());
+        let chunk = &data[written..end];
+        let mut off = 0;
+        while off < chunk.len() {
+            let n = handle.write_bulk(
+                BULK_WRITE_ENDPOINT,
+                &chunk[off..],
+                Duration::from_millis(USB_TIMEOUT_MILLIS * 20),
+            )?;
+            if n == 0 {
+                anyhow::bail!("bulk write made no progress");
+            }
+            off += n;
+        }
+        written += chunk.len();
+    }
+    Ok(())
+}

@@ -10,12 +10,12 @@ use rusb::{DeviceHandle, UsbContext};
 
 use crate::crypto::{encrypt_packets, retailmac};
 use crate::ekb::get_ekb_for_device;
-use crate::types::{DiscFormat, Wireformat, FRAME_SIZE};
-use crate::{
+use crate::secure::{
     commit_track, enter_secure_session, get_leaf_id, leave_secure_session, prepare_download,
-    release, send_key_data, send_track, session_key_exchange, session_key_forget, set_track_title,
-    setup_download,
+    release, send_key_data, send_track, session_key_exchange, session_key_forget, setup_download,
 };
+use crate::track_info::set_track_title;
+use crate::types::{DiscFormat, Wireformat, FRAME_SIZE};
 
 /// The hardcoded content ID used for uploads. Mirrors `MDTrack.getContentID`
 /// (`netmd-interface.ts:992`).

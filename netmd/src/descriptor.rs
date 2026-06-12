@@ -1,4 +1,7 @@
 use crate::query::Query;
+use crate::transport::send_query;
+
+use rusb::{DeviceHandle, UsbContext};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Descriptor {
@@ -45,6 +48,18 @@ impl DescriptorAction {
 }
 
 pub struct DescriptorCommand(pub Descriptor, pub DescriptorAction);
+
+/// Opens then closes a descriptor TD. Mirrors `changeDescriptorState`.
+pub fn change_descriptor_state<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+    descriptor: Descriptor,
+    action: DescriptorAction,
+) -> anyhow::Result<()> {
+    // The JS reference swallows descriptor errors; we propagate them so callers
+    // can decide. Most descriptor open/close pairs are expected to succeed.
+    send_query(handle, DescriptorCommand(descriptor, action))?;
+    Ok(())
+}
 
 impl TryFrom<DescriptorCommand> for Query {
     type Error = anyhow::Error;
