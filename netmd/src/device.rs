@@ -445,6 +445,14 @@ impl ConnectedDevice {
     }
 }
 
+pub fn list_connected_devices() -> anyhow::Result<Vec<&'static DeviceDefinition>> {
+    Ok(rusb::devices()?
+        .iter()
+        .filter_map(connected_supported_device)
+        .map(|cd| cd.definition)
+        .collect())
+}
+
 fn connected_supported_device(device: Device<GlobalContext>) -> Option<ConnectedDevice> {
     let desc = device.device_descriptor().ok()?;
     supported_device(desc.vendor_id(), desc.product_id())

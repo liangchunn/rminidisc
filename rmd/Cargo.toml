@@ -16,3 +16,4 @@ ratatui = { workspace = true }
 crossterm = { workspace = true }
 lofty = { workspace = true }
 rusb = { workspace = true }
+clap = { workspace = true }

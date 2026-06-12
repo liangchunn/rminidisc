@@ -1,35 +1,5 @@
 //! `rmd` — thin runner over the `netmd` library.
 //!
-//! Commands:
-//!   rmd [--device VID:PID]
-//!                     — dump disc + track metadata (default)
-//!   rmd [--device VID:PID] info
-//!                     — same as above
-//!   rmd [--device VID:PID] upload <file> [--format sp|lp2|lp105|lp4] [--title T]
-//!                     — encode (if needed) and write a track to the device;
-//!                       the title is read from the file's metadata tags when
-//!                       --title is omitted, falling back to the filename stem
-//!   rmd [--device VID:PID] upload --folder <dir> [--format sp|lp2|lp105|lp4]
-//!                     — upload every file in a directory (top-level only);
-//!                       each track's title is read from its metadata tags,
-//!                       falling back to the filename stem
-//!   rmd [--device VID:PID] erase [<track> | disc]
-//!                     — erase a single track (1-based, as shown by `info`),
-//!                       or the whole disc when given `disc` or no argument
-//!   rmd [--device VID:PID] rename <track | disc> <title> [--full]
-//!                     — set a track or disc title; `--full` writes the
-//!                       full-width title field
-//!   rmd [--device VID:PID] move <from> <to>
-//!                     — reorder a track (1-based indexes)
-//!   rmd [--device VID:PID] play | pause | stop | next | prev | ff | rewind | eject
-//!                     — one-shot playback transport controls
-//!   rmd [--device VID:PID] goto <track>
-//!                     — seek to the start of a track (1-based)
-//!   rmd [--device VID:PID] status
-//!                     — print a one-shot playback status snapshot
-//!   rmd [--device VID:PID] control
-//!                     — launch the interactive playback TUI
-//!
 //! Device interaction is delegated to the `netmd` crate; this binary only does
 //! argument parsing and host-side audio preparation (ffmpeg / atracdenc).
 
@@ -37,9 +7,10 @@ mod logbuf;
 mod tui;
 
 use std::path::Path;
-use std::process::Command;
+use std::process::Command as ProcCommand;
 
 use anyhow::{bail, Context};
+use clap::{Args, Parser, Subcommand};
 use log::info;
 use lofty::prelude::*;
 use lofty::read_from_path;
@@ -48,81 +19,141 @@ use netmd::wav;
 use netmd::Wireformat;
 use rusb::UsbContext;
 
+/// NetMD MiniDisc command-line tool.
+///
+/// Dump metadata, upload/erase/rename/reorder tracks, and control playback
+/// on NetMD MiniDisc devices.
+#[derive(Parser)]
+#[command(
+    name = "rmd",
+    about = "NetMD MiniDisc command-line tool",
+    long_about = "Dump metadata, upload/erase/rename/reorder tracks, and control \
+                  playback on NetMD MiniDisc devices."
+)]
+struct Cli {
+    /// NetMD device as VID:PID (e.g. 054c:0084)
+    #[arg(
+        short = 'd',
+        long,
+        global = true,
+        value_parser = |s: &str| parse_device_selector(s).map_err(|e| e.to_string())
+    )]
+    device: Option<netmd::DeviceSelector>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Dump disc + track metadata (default when no command is given)
+    Info,
+    /// Encode and write a track to the device
+    Upload(UploadArgs),
+    /// Erase a single track or the whole disc
+    Erase {
+        /// Track number (1-based, as shown by `info`) or "disc"
+        target: Option<String>,
+    },
+    /// Set a track or disc title
+    Rename {
+        /// "disc" or a track number (1-based)
+        target: String,
+        /// New title
+        title: String,
+        /// Write the full-width title field
+        #[arg(long)]
+        full: bool,
+    },
+    /// Reorder a track
+    #[command(name = "move")]
+    MoveTrack {
+        /// Source track (1-based)
+        from: u16,
+        /// Destination position (1-based)
+        to: u16,
+    },
+    /// Start playback
+    Play,
+    /// Pause playback
+    Pause,
+    /// Stop playback
+    Stop,
+    /// Skip to the next track
+    Next,
+    /// Go back to the previous track
+    Prev,
+    /// Fast-forward
+    Ff,
+    /// Rewind
+    Rewind,
+    /// Eject the disc
+    Eject,
+    /// Seek to the start of a track
+    Goto {
+        /// Track number (1-based)
+        track: u16,
+    },
+    /// Print a one-shot playback status snapshot
+    Status,
+    /// List supported NetMD devices
+    List,
+    /// Launch the interactive playback TUI
+    Control,
+}
+
+#[derive(Args)]
+struct UploadArgs {
+    /// Input audio file
+    #[arg(conflicts_with = "folder")]
+    file: Option<String>,
+
+    /// Upload every file in a directory (top-level only)
+    #[arg(short = 'F', long, conflicts_with_all = ["file", "title"])]
+    folder: Option<String>,
+
+    /// Encoding format (sp, lp2, lp105, lp4)
+    #[arg(short = 'f', long, default_value = "sp")]
+    format: String,
+
+    /// Track title (overrides file metadata tags; cannot be used with --folder)
+    #[arg(short = 't', long, conflicts_with = "folder")]
+    title: Option<String>,
+}
+
 fn main() -> anyhow::Result<()> {
-    let args = parse_global_args(std::env::args().skip(1))?;
+    let cli = Cli::parse();
 
     // The interactive TUI installs its own in-memory logger (env_logger would
     // write to stderr and corrupt the full-screen UI). Every other command uses
     // the normal stderr logger.
-    if args.get(1).map(String::as_str) == Some("control") {
-        return tui::run(args.device);
+    if matches!(cli.command, Some(Command::Control)) {
+        return tui::run(cli.device);
     }
-    env_logger::init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info"),
+    )
+    .init();
 
-    match args.get(1).map(String::as_str) {
-        None | Some("info") => cmd_info(args.device),
-        Some("upload") => cmd_upload(&args.rest[2..], args.device),
-        Some("erase") => cmd_erase(&args.rest[2..], args.device),
-        Some("rename") => cmd_rename(&args.rest[2..], args.device),
-        Some("move") => cmd_move(&args.rest[2..], args.device),
-        Some("play") | Some("pause") | Some("stop") | Some("next") | Some("prev")
-        | Some("ff") | Some("rewind") | Some("eject") => {
-            cmd_transport(args.get(1).unwrap(), args.device)
-        }
-        Some("goto") => cmd_goto(&args.rest[2..], args.device),
-        Some("status") => cmd_status(args.device),
-        Some(other) => {
-            bail!(
-                "unknown command {other:?}. usage: rmd [--device VID:PID] [info | \
-                 upload <file> [--format F] [--title T] | \
-                 upload --folder <dir> [--format F] | \
-                 erase [<track> | disc] | \
-                 rename <track | disc> <title> [--full] | \
-                 move <from> <to> | \
-                 play | pause | stop | next | prev | ff | rewind | eject | \
-                 goto <track> | status | control]"
-            )
-        }
+    match cli.command.unwrap_or(Command::Info) {
+        Command::Info => cmd_info(cli.device),
+        Command::Upload(args) => cmd_upload(args, cli.device),
+        Command::Erase { target } => cmd_erase(target, cli.device),
+        Command::Rename { target, title, full } => cmd_rename(target, title, full, cli.device),
+        Command::MoveTrack { from, to } => cmd_move(from, to, cli.device),
+        Command::Play => cmd_transport("play", cli.device),
+        Command::Pause => cmd_transport("pause", cli.device),
+        Command::Stop => cmd_transport("stop", cli.device),
+        Command::Next => cmd_transport("next", cli.device),
+        Command::Prev => cmd_transport("prev", cli.device),
+        Command::Ff => cmd_transport("ff", cli.device),
+        Command::Rewind => cmd_transport("rewind", cli.device),
+        Command::Eject => cmd_transport("eject", cli.device),
+        Command::Goto { track } => cmd_goto(track, cli.device),
+        Command::Status => cmd_status(cli.device),
+        Command::List => cmd_list(),
+        Command::Control => unreachable!("Control handled before env_logger init"),
     }
-}
-
-struct Args {
-    device: Option<netmd::DeviceSelector>,
-    rest: Vec<String>,
-}
-
-impl Args {
-    fn get(&self, index: usize) -> Option<&String> {
-        self.rest.get(index)
-    }
-}
-
-fn parse_global_args<I>(args: I) -> anyhow::Result<Args>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut device = None;
-    let mut rest = vec![String::from("rmd")];
-    let mut args = args.into_iter();
-
-    while let Some(arg) = args.next() {
-        if arg == "--device" || arg == "-d" {
-            let value = args.next().context("--device requires VID:PID")?;
-            let selector = parse_device_selector(&value)?;
-            if device.replace(selector).is_some() {
-                bail!("--device specified more than once");
-            }
-        } else if let Some(value) = arg.strip_prefix("--device=") {
-            let selector = parse_device_selector(value)?;
-            if device.replace(selector).is_some() {
-                bail!("--device specified more than once");
-            }
-        } else {
-            rest.push(arg);
-        }
-    }
-
-    Ok(Args { device, rest })
 }
 
 fn parse_device_selector(value: &str) -> anyhow::Result<netmd::DeviceSelector> {
@@ -156,6 +187,20 @@ fn parse_track_index(s: &str) -> anyhow::Result<u16> {
         bail!("track numbers are 1-based (as shown by `info`)");
     }
     u16::try_from(n - 1).context("track number out of range")
+}
+
+fn cmd_list() -> anyhow::Result<()> {
+    let devices = netmd::list_connected_devices()?;
+    if devices.is_empty() {
+        bail!("no supported NetMD devices connected");
+    }
+    for device in &devices {
+        info!(
+            "{:04x}:{:04x}  {}",
+            device.vendor_id, device.product_id, device.name
+        );
+    }
+    Ok(())
 }
 
 fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
@@ -226,14 +271,9 @@ fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_erase(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let target = args.first().map(String::as_str);
-    if args.len() > 1 {
-        bail!("usage: rmd erase [<track> | disc]");
-    }
-
+fn cmd_erase(target: Option<String>, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     let handle = netmd::open_device_matching(device)?;
-    match target {
+    match target.as_deref() {
         None | Some("disc") => {
             netmd::erase_disc(&handle)?;
             info!("disc erased");
@@ -248,23 +288,12 @@ fn cmd_erase(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::
     Ok(())
 }
 
-fn cmd_rename(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let mut target: Option<String> = None;
-    let mut title: Option<String> = None;
-    let mut full = false;
-
-    for arg in args {
-        match arg.as_str() {
-            "--full" => full = true,
-            other if target.is_none() => target = Some(other.to_string()),
-            other if title.is_none() => title = Some(other.to_string()),
-            other => bail!("unexpected argument {other:?}"),
-        }
-    }
-
-    let target = target.context("usage: rmd rename <track | disc> <title> [--full]")?;
-    let title = title.context("usage: rmd rename <track | disc> <title> [--full]")?;
-
+fn cmd_rename(
+    target: String,
+    title: String,
+    full: bool,
+    device: Option<netmd::DeviceSelector>,
+) -> anyhow::Result<()> {
     let handle = netmd::open_device_matching(device)?;
     if target == "disc" {
         netmd::rename_disc(&handle, &title, full)?;
@@ -285,12 +314,13 @@ fn cmd_rename(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow:
     Ok(())
 }
 
-fn cmd_move(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    if args.len() != 2 {
-        bail!("usage: rmd move <from> <to>");
-    }
-    let source = parse_track_index(&args[0])?;
-    let dest = parse_track_index(&args[1])?;
+fn cmd_move(
+    from: u16,
+    to: u16,
+    device: Option<netmd::DeviceSelector>,
+) -> anyhow::Result<()> {
+    let source = parse_track_index(&from.to_string())?;
+    let dest = parse_track_index(&to.to_string())?;
 
     let handle = netmd::open_device_matching(device)?;
     netmd::move_track(&handle, source, dest)?;
@@ -317,11 +347,8 @@ fn cmd_transport(action: &str, device: Option<netmd::DeviceSelector>) -> anyhow:
     Ok(())
 }
 
-fn cmd_goto(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    if args.len() != 1 {
-        bail!("usage: rmd goto <track>");
-    }
-    let track = parse_track_index(&args[0])?;
+fn cmd_goto(track: u16, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let track = parse_track_index(&track.to_string())?;
     let handle = netmd::open_device_matching(device)?;
     let resulting = netmd::goto_track(&handle, track)?;
     info!("seeked to track #{}", resulting + 1);
@@ -347,71 +374,6 @@ fn cmd_status(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     }
     netmd::close_device(&handle)?;
     Ok(())
-}
-
-struct UploadArgs {
-    file: Option<String>,
-    folder: Option<String>,
-    format: String,
-    title: Option<String>,
-}
-
-fn parse_upload_args(args: &[String]) -> anyhow::Result<UploadArgs> {
-    let mut file: Option<String> = None;
-    let mut folder: Option<String> = None;
-    let mut format = "sp".to_string();
-    let mut title: Option<String> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--format" | "-f" => {
-                i += 1;
-                format = args.get(i).context("--format requires a value")?.clone();
-            }
-            "--title" | "-t" => {
-                i += 1;
-                title = Some(args.get(i).context("--title requires a value")?.clone());
-            }
-            "--folder" | "-F" => {
-                i += 1;
-                if folder.is_some() {
-                    bail!("--folder specified more than once");
-                }
-                folder = Some(
-                    args.get(i)
-                        .context("--folder requires a directory path")?
-                        .clone(),
-                );
-            }
-            other if !other.starts_with('-') => {
-                if file.is_none() {
-                    file = Some(other.to_string());
-                } else {
-                    bail!("unexpected argument {other:?}");
-                }
-            }
-            other => bail!("unknown option {other:?}"),
-        }
-        i += 1;
-    }
-
-    if file.is_some() && folder.is_some() {
-        bail!("--folder and a positional file argument are mutually exclusive");
-    }
-    if file.is_none() && folder.is_none() {
-        bail!("upload requires an input file, or --folder for a directory");
-    }
-    if folder.is_some() && title.is_some() {
-        bail!("--title cannot be used with --folder (use per-file metadata instead)");
-    }
-
-    Ok(UploadArgs {
-        file,
-        folder,
-        format,
-        title,
-    })
 }
 
 fn resolve_title(file: &str) -> String {
@@ -545,8 +507,14 @@ fn upload_folder<T: UsbContext>(
     Ok(())
 }
 
-fn cmd_upload(args: &[String], device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let args = parse_upload_args(args)?;
+fn cmd_upload(
+    args: UploadArgs,
+    device: Option<netmd::DeviceSelector>,
+) -> anyhow::Result<()> {
+    if args.file.is_none() && args.folder.is_none() {
+        bail!("upload requires an input file, or --folder for a directory");
+    }
+
     let requested = args.format.to_lowercase();
 
     let handle = netmd::open_device_matching(device)?;
@@ -650,7 +618,7 @@ fn temp_path(ext: &str) -> String {
 }
 
 fn run_ffmpeg(args: &[&str]) -> anyhow::Result<()> {
-    let status = Command::new("ffmpeg")
+    let status = ProcCommand::new("ffmpeg")
         .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -666,7 +634,7 @@ fn run_atracdenc(args: &[&str]) -> anyhow::Result<()> {
     // Prefer an ATRACDENC env override, else the in-tree arm64 build.
     let bin = std::env::var("ATRACDENC")
         .unwrap_or_else(|_| "atracdenc/build-arm64/src/atracdenc".to_string());
-    let status = Command::new(&bin)
+    let status = ProcCommand::new(&bin)
         .args(args)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

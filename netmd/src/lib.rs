@@ -27,9 +27,9 @@ pub mod wav;
 pub use commands::get_device_status;
 pub use descriptor::change_descriptor_state;
 pub use device::{
-    close_device, device_ids, open_device, open_device_matching, supported_device,
-    DeviceDefinition, DeviceFlags, DeviceSelector, SHARP_VENDOR_ID, SONY_VENDOR_ID,
-    SUPPORTED_DEVICES,
+    close_device, device_ids, list_connected_devices, open_device, open_device_matching,
+    supported_device, DeviceDefinition, DeviceFlags, DeviceSelector, SHARP_VENDOR_ID,
+    SONY_VENDOR_ID, SUPPORTED_DEVICES,
 };
 pub use disc::{
     get_disc_capacity, get_disc_flags, get_disc_subunit_identifier, get_disc_title, get_disk_title,
