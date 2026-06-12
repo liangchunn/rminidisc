@@ -12,6 +12,7 @@
 use cipher::generic_array::GenericArray;
 use cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit};
 use des::{Des, TdesEde2};
+use log::trace;
 
 type DesCbcEnc = cbc::Encryptor<Des>;
 type DesCbcDec = cbc::Decryptor<Des>;
@@ -96,6 +97,7 @@ pub fn tdes_cbc_encrypt(key: &[u8; 16], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
 pub fn retailmac(key: &[u8; 16], value: &[u8], iv: &[u8; 8]) -> [u8; 8] {
     assert!(value.len() >= 8, "retailmac: value too short");
     assert_eq!(value.len() % 8, 0, "retailmac: value not block-aligned");
+    trace!("retailmac: value_len={} iv=...", value.len());
 
     let subkey_a: [u8; 8] = key[0..8].try_into().unwrap();
     let split = value.len() - 8;
@@ -133,6 +135,7 @@ pub struct EncryptedPacket {
 pub fn encrypt_packets(kek: &[u8; 8], frame_size: usize, data: &[u8]) -> Vec<EncryptedPacket> {
     use rand::RngCore;
 
+    trace!("encrypt_packets: frame_size={} data_len={}", frame_size, data.len());
     let mut raw_key = [0u8; 8];
     rand::thread_rng().fill_bytes(&mut raw_key);
 
@@ -179,6 +182,7 @@ pub fn encrypt_packets(kek: &[u8; 8], frame_size: usize, data: &[u8]) -> Vec<Enc
         packet_count += 1;
     }
 
+    trace!("encrypt_packets: produced {} packets", packets.len());
     packets
 }
 

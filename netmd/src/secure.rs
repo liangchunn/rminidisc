@@ -1,7 +1,7 @@
 use std::thread::sleep;
 use std::time::Duration;
 
-use log::debug;
+use log::{debug, info, trace};
 use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
@@ -222,6 +222,7 @@ pub fn send_track<T: UsbContext>(
     mut progress: Option<&mut dyn FnMut(u64, u64)>,
 ) -> anyhow::Result<(u16, String, String)> {
     debug!("send track (wf=0x{wireformat:02x} df=0x{discformat:02x} frames={frames})");
+    info!("sending track: {} packets, {} total bytes", packets.len(), pkt_size + 24);
     // The sharps are slow...
     sleep(Duration::from_millis(200));
 
@@ -300,11 +301,20 @@ fn hex_string(bytes: &[u8]) -> String {
 pub fn prepare_download<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
     debug!("prepare download");
     // Wait for the device to be ready or for a blank disc.
-    for _ in 0..50 {
+    for i in 0..50 {
         match get_operating_status(handle) {
-            Ok(OperatingStatus::Ready) | Ok(OperatingStatus::BlankDisc) => break,
-            _ => sleep(Duration::from_millis(200)),
+            Ok(OperatingStatus::Ready) | Ok(OperatingStatus::BlankDisc) => {
+                info!("device ready for download (poll #{i})");
+                break;
+            }
+            Ok(status) => {
+                trace!("  poll #{i}: device status={status:?}");
+            }
+            _ => {
+                trace!("  poll #{i}: no status yet");
+            }
         }
+        sleep(Duration::from_millis(200));
     }
     // Best-effort: forget any prior session.
     let _ = session_key_forget(handle);

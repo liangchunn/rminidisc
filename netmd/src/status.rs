@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, trace};
 use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
@@ -29,6 +29,7 @@ pub fn get_status<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<Vec
 
 /// Returns true when a disc is present. Mirrors `NetMDInterface.isDiscPresent`.
 pub fn is_disc_present<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<bool> {
+    trace!("check disc present");
     let status = get_status(handle)?;
     Ok(status.get(4) == Some(&0x40))
 }

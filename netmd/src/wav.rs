@@ -7,6 +7,8 @@
 //! Unlike the JS reference (which hardcodes chunk offsets), this walks the RIFF
 //! chunk list generically so `fact`/`LIST` chunks are handled robustly.
 
+use log::trace;
+
 use crate::types::Wireformat;
 
 /// Sony ATRAC3 WAVE format tag.
@@ -41,6 +43,7 @@ fn u32_le(b: &[u8], o: usize) -> u32 {
 
 /// Parses a RIFF/WAVE file, locating the `fmt ` and `data` chunks.
 pub fn parse_wav(data: &[u8]) -> anyhow::Result<WavInfo> {
+    trace!("parsing WAV: {} bytes", data.len());
     if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
         anyhow::bail!("not a RIFF/WAVE file");
     }

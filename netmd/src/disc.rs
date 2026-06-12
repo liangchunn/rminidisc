@@ -1,4 +1,4 @@
-use log::debug;
+use log::{debug, trace};
 use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
@@ -89,6 +89,7 @@ pub fn get_disc_title<T: UsbContext>(
     handle: &DeviceHandle<T>,
     w_char: bool,
 ) -> anyhow::Result<String> {
+    trace!("get disc title (wchar={w_char})");
     Ok(disc_title_from_raw(
         &get_disk_title(handle, w_char)?,
         w_char,
@@ -194,6 +195,7 @@ pub fn rename_disc<T: UsbContext>(
     title: &str,
     w_char: bool,
 ) -> anyhow::Result<()> {
+    trace!("rename disc to {title:?} (wchar={w_char})");
     let title = sanitize_title(title, w_char);
     let raw_title = get_disk_title(handle, w_char)?;
     let current_title = disc_title_from_raw(&raw_title, w_char);

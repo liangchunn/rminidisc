@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use log::debug;
+use log::{debug, info};
 use rusb::{Device, DeviceHandle, GlobalContext, UsbContext};
 
 /// Sony USB vendor ID.
@@ -453,6 +453,7 @@ fn connected_supported_device(device: Device<GlobalContext>) -> Option<Connected
 
 /// Releases the claimed interface. Mirrors the runner's previous teardown.
 pub fn close_device<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+    info!("closing device");
     handle.release_interface(0)?;
     Ok(())
 }

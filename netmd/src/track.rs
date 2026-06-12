@@ -5,7 +5,7 @@
 //! (host → device), which the MZ-N505 supports. Track-READ (device → host /
 //! `saveTrackToArray`) is NOT ported (RH1/M200-only). See UNPORTED.md §3.
 
-use log::debug;
+use log::{debug, info, trace};
 use rusb::{DeviceHandle, UsbContext};
 
 use crate::crypto::{encrypt_packets, retailmac};
@@ -90,6 +90,13 @@ pub fn download_track<T: UsbContext>(
     product: u16,
     progress: Option<&mut dyn FnMut(u64, u64)>,
 ) -> anyhow::Result<(u16, String, String)> {
+    info!(
+        "downloading track '{}' (format={:?}, {} frames, {} bytes)",
+        track.title,
+        track.format,
+        track.frame_count(),
+        track.total_size(),
+    );
     prepare_download(handle)?;
 
     // --- MDSession.init ---
@@ -124,6 +131,14 @@ pub fn download_track<T: UsbContext>(
     let _ = leave_secure_session(handle);
     let _ = release(handle);
 
+    match &result {
+        Ok((track_num, uuid, _)) => {
+            info!("track #{track_num} uploaded successfully (uuid={uuid})");
+        }
+        Err(e) => {
+            info!("track upload failed: {e}");
+        }
+    }
     result
 }
 
@@ -133,9 +148,12 @@ fn download_track_inner<T: UsbContext>(
     session_key: &[u8; 8],
     progress: Option<&mut dyn FnMut(u64, u64)>,
 ) -> anyhow::Result<(u16, String, String)> {
+    trace!("setting up download");
     setup_download(handle, &CONTENT_ID, &KEK, session_key)?;
 
+    trace!("encrypting packets (frame_size={})", frame_size(track.format));
     let packets = encrypt_packets(&KEK, frame_size(track.format), &track.data);
+    trace!("sending encrypted track");
     let (track_num, uuid, ccid) = send_track(
         handle,
         track.format as u8,
@@ -147,10 +165,12 @@ fn download_track_inner<T: UsbContext>(
         progress,
     )?;
 
+    trace!("setting track title");
     set_track_title(handle, track_num, &track.title, false)?;
     if let Some(fw) = &track.full_width_title {
         set_track_title(handle, track_num, fw, true)?;
     }
+    trace!("committing track #{track_num}");
     commit_track(handle, track_num, session_key)?;
     Ok((track_num, uuid, ccid))
 }

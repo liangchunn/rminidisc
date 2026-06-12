@@ -4,6 +4,8 @@
 //! devices; the deck-specific `CorruptedDeckEKB` applies to MDS-JB980 / JE780 /
 //! NT1 decks with a corrupted all-`0xff` leaf ID.
 
+use log::trace;
+
 const SONY_VENDOR_ID: u16 = 0x054c;
 const CORRUPTED_DECK_PRODUCT_ID: u16 = 0x0081;
 
@@ -81,8 +83,10 @@ fn is_corrupted_deck_ekb_match(leaf_id: &[u8], vendor: u16, product: u16) -> boo
 /// open-source EKB.
 pub fn get_ekb_for_device(leaf_id: &[u8], vendor: u16, product: u16) -> Ekb {
     if is_corrupted_deck_ekb_match(leaf_id, vendor, product) {
+        trace!("selected corrupted-deck EKB (vendor={vendor:04x} product={product:04x})");
         corrupted_deck_ekb()
     } else {
+        trace!("selected open-source EKB (vendor={vendor:04x} product={product:04x})");
         open_source_ekb()
     }
 }
