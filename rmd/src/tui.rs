@@ -22,9 +22,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap,
-};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
 use rusb::{DeviceHandle, GlobalContext};
 
@@ -226,9 +224,9 @@ impl App {
     /// stays current; back off when stopped/paused to spare the slow USB link.
     fn current_poll_interval(&self) -> Duration {
         match self.status.map(|s| s.state) {
-            Some(
-                PlaybackState::Playing | PlaybackState::FastForward | PlaybackState::Rewind,
-            ) => STATUS_POLL_ACTIVE,
+            Some(PlaybackState::Playing | PlaybackState::FastForward | PlaybackState::Rewind) => {
+                STATUS_POLL_ACTIVE
+            }
             _ => STATUS_POLL_IDLE,
         }
     }
@@ -255,10 +253,7 @@ impl App {
     }
 
     fn toggle_play_pause(&mut self) {
-        let playing = matches!(
-            self.status.map(|s| s.state),
-            Some(PlaybackState::Playing)
-        );
+        let playing = matches!(self.status.map(|s| s.state), Some(PlaybackState::Playing));
         if playing {
             self.transport("pause", netmd::pause);
         } else {
@@ -562,10 +557,7 @@ fn draw_tracks(f: &mut Frame, area: Rect, app: &App) {
                 ),
                 Span::raw(format!("{title:<32} ")),
                 Span::styled(
-                    format!(
-                        "{:02}:{:02}:{:02}",
-                        t.length[0], t.length[1], t.length[2]
-                    ),
+                    format!("{:02}:{:02}:{:02}", t.length[0], t.length[1], t.length[2]),
                     Style::default().fg(Color::Yellow),
                 ),
                 Span::raw("  "),

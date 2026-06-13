@@ -17,3 +17,4 @@ crossterm = "0.28.1"
 lofty = "0.24.0"
 rusb = "0.9.4"
 clap = { version = "4", features = ["derive"] }
+atracdenc = { path = "../../atracdenc-codex/crates/atracdenc" }

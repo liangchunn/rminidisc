@@ -111,7 +111,9 @@ pub fn install(initial: LevelFilter) -> (LogBuffer, LevelControl) {
     // against the runtime atomic so the modal can raise the level later.
     let _ = log::set_logger(logger);
     log::set_max_level(LevelFilter::Trace);
-    logger.level.store(level_to_usize(initial), Ordering::Relaxed);
+    logger
+        .level
+        .store(level_to_usize(initial), Ordering::Relaxed);
     (
         logger.buffer.clone(),
         LevelControl {

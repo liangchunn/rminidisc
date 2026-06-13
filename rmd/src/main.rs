@@ -1,7 +1,7 @@
 //! `rmd` — thin runner over the `netmd` library.
 //!
 //! Device interaction is delegated to the `netmd` crate; this binary only does
-//! argument parsing and host-side audio preparation (ffmpeg / atracdenc).
+//! argument parsing and host-side audio preparation (ffmpeg / ATRAC encoding).
 
 mod logbuf;
 mod tui;
@@ -532,8 +532,8 @@ fn cmd_upload(args: UploadArgs, device: Option<netmd::DeviceSelector>) -> anyhow
 /// - If the input is an ATRAC3 WAV, its payload is used directly (header
 ///   stripped) and the requested format is ignored (the file dictates it).
 /// - SP: transcode to big-endian s16 PCM via ffmpeg.
-/// - LP2/LP105/LP4: transcode to a 44.1 kHz stereo WAV via ffmpeg, encode with
-///   atracdenc, then strip the resulting ATRAC3 WAV header.
+/// - LP2/LP105/LP4: transcode to a 44.1 kHz stereo WAV via ffmpeg, encode as
+///   ATRAC3, then strip the resulting ATRAC3 WAV header.
 fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Vec<u8>)> {
     let raw = std::fs::read(input).with_context(|| format!("reading {input}"))?;
 
@@ -561,35 +561,31 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Ve
                 "-y", "-i", input, "-ar", "44100", "-ac", "2", "-f", "wav", &wav_in,
             ])?;
 
-            // Encode to ATRAC3 (RIFF container) via atracdenc.
+            // Encode to ATRAC3 (RIFF container) using the local atracdenc crate.
             let (codec, bitrate, wf) = match requested {
-                "lp2" => ("atrac3", "128", Wireformat::Lp2),
-                "lp105" => ("atrac3", "102", Wireformat::L105kbps),
-                "lp4" => ("atrac3_lp", "64", Wireformat::Lp4),
+                "lp2" => (atracdenc::Codec::Atrac3, 128, Wireformat::Lp2),
+                "lp105" => (atracdenc::Codec::Atrac3, 102, Wireformat::L105kbps),
+                "lp4" => (atracdenc::Codec::Atrac3Lp4, 64, Wireformat::Lp4),
                 _ => unreachable!(),
             };
-            let atrac_out = temp_path("at3.wav");
-            run_atracdenc(&[
-                "-e",
-                codec,
-                "-i",
-                &wav_in,
-                "-o",
-                &atrac_out,
-                "--container",
-                "riff",
-                "--bitrate",
-                bitrate,
-            ])?;
-
-            let encoded = std::fs::read(&atrac_out)?;
+            let wav_data = std::fs::read(&wav_in)
+                .with_context(|| format!("reading normalized WAV {wav_in}"))?;
             let _ = std::fs::remove_file(&wav_in);
-            let _ = std::fs::remove_file(&atrac_out);
+            let encoded = atracdenc::EncodeBuilder::new()
+                .codec(codec)
+                .container(atracdenc::Container::Riff)
+                .input_bytes(wav_data)
+                .at3_settings(atracdenc::At3Settings {
+                    bitrate_kbps: Some(bitrate),
+                    ..Default::default()
+                })
+                .run_to_vec()
+                .context("encoding ATRAC3 with atracdenc crate")?;
 
             let (detected, payload) = wav::atrac3_info(&encoded)
-                .context("atracdenc output was not a recognizable ATRAC3 WAV")?;
+                .context("ATRAC encoder output was not a recognizable ATRAC3 WAV")?;
             if detected != wf {
-                info!("note: atracdenc produced {detected:?}, requested {wf:?}");
+                info!("note: ATRAC encoder produced {detected:?}, requested {wf:?}");
             }
             Ok((detected, payload.to_vec()))
         }
@@ -618,21 +614,6 @@ fn run_ffmpeg(args: &[&str]) -> anyhow::Result<()> {
         .context("failed to run ffmpeg (is it installed?)")?;
     if !status.success() {
         bail!("ffmpeg failed with status {status}");
-    }
-    Ok(())
-}
-
-fn run_atracdenc(args: &[&str]) -> anyhow::Result<()> {
-    // Prefer an ATRACDENC env override, else the in-tree arm64 build.
-    let bin = std::env::var("ATRACDENC").unwrap_or_else(|_| "atracdenc".to_string());
-    let status = ProcCommand::new(&bin)
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .with_context(|| format!("failed to run atracdenc at {bin}"))?;
-    if !status.success() {
-        bail!("atracdenc failed with status {status}");
     }
     Ok(())
 }
