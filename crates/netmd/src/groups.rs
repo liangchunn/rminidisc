@@ -31,9 +31,7 @@ pub struct RawTrackGroup {
 ///
 /// The first entry is the synthetic "ungrouped" bucket (`name: None`) holding
 /// any tracks not covered by a group, present only when such tracks exist.
-pub fn get_track_group_list<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-) -> Result<Vec<RawTrackGroup>> {
+pub fn get_track_group_list<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Vec<RawTrackGroup>> {
     debug!("get track group list");
     let raw_title = get_disk_title(handle, false)?;
     let raw_full_title = get_disk_title(handle, true)?;
@@ -117,7 +115,9 @@ fn parse_track_group_list(
         });
     }
 
-    let ungrouped: Vec<u16> = (0..track_count).filter(|t| !assigned[*t as usize]).collect();
+    let ungrouped: Vec<u16> = (0..track_count)
+        .filter(|t| !assigned[*t as usize])
+        .collect();
     if !ungrouped.is_empty() {
         result.insert(
             0,
@@ -666,9 +666,23 @@ mod tests {
         // Ungrouped bucket (track 2) first, then the named group.
         assert_eq!(disc.groups.len(), 2);
         assert_eq!(disc.groups[0].title, None);
-        assert_eq!(disc.groups[0].tracks.iter().map(|t| t.index).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(
+            disc.groups[0]
+                .tracks
+                .iter()
+                .map(|t| t.index)
+                .collect::<Vec<_>>(),
+            vec![2]
+        );
         assert_eq!(disc.groups[1].title.as_deref(), Some("Grp"));
-        assert_eq!(disc.groups[1].tracks.iter().map(|t| t.index).collect::<Vec<_>>(), vec![0, 1]);
+        assert_eq!(
+            disc.groups[1]
+                .tracks
+                .iter()
+                .map(|t| t.index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
 
         // Overlap is rejected.
         assert!(disc.add_group(1, 2, "X".into(), None).is_err());

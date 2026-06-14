@@ -745,7 +745,9 @@ fn next_track_row(rows: &[Row], current: usize) -> Option<usize> {
 
 /// Nearest track row before `current`, skipping group headers.
 fn prev_track_row(rows: &[Row], current: usize) -> Option<usize> {
-    (0..current).rev().find(|&i| matches!(rows[i], Row::Track(_)))
+    (0..current)
+        .rev()
+        .find(|&i| matches!(rows[i], Row::Track(_)))
 }
 
 #[cfg(test)]
