@@ -1,4 +1,4 @@
-//! Interactive playback TUI (`rmd control`).
+//! Interactive playback TUI (`minidisc-cli control`).
 //!
 //! A full-screen ratatui interface that lists the disc's tracks (organized by
 //! group when the disc defines groups), shows live playback status, and maps
@@ -124,7 +124,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-/// Entry point for `rmd control`.
+/// Entry point for `minidisc-cli control`.
 pub fn run(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     // Install the in-memory logger before any device I/O so its log lines are
     // captured. Honor RUST_LOG for the initial level, defaulting to Info.
@@ -603,7 +603,7 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  Disc: "),
         Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
     ]);
-    let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL).title(" rmd "));
+    let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL).title(" minidisc-cli "));
     f.render_widget(p, area);
 }
 

@@ -17,10 +17,10 @@ Low-level protocol library for NetMD devices. Provides:
 - Playback transport (play, pause, stop, seek, ff/rewind, eject)
 - Supported devices: Sony (054c:*) and Sharp (04dd:*) NetMD recorders
 
-### `rmd` — CLI Binary
+### `minidisc-cli` — CLI Binary
 
 ```sh
-cargo build --release -p rmd
+cargo build --release -p minidisc-cli
 ```
 
 Front-end for the `netmd` library. Subcommands:

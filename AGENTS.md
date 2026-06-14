@@ -5,7 +5,7 @@ Three crates under `crates/`: `netmd` (protocol lib), `minidisc-audio` (decode/r
 
 ## Build / test gotchas
 
-- **Package vs binary name mismatch**: the package is `minidisc-cli`; clap's `name = "rmd"` only sets the help/usage string. Use `cargo build -p minidisc-cli` / `cargo run -p minidisc-cli -- <args>`. `-p rmd` does NOT work (README's `-p rmd` is stale).
+- Use `cargo build -p minidisc-cli` / `cargo run -p minidisc-cli -- <args>` for the binary.
 - Run all tests: `cargo test` (unit tests are inline in `crates/*/src/*.rs`; they are parser/scan/crypto tests and need **no** hardware). Single crate: `cargo test -p netmd`.
 - Actually exercising device commands requires a real USB NetMD recorder; there is no hardware mock.
 
