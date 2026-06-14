@@ -7,7 +7,6 @@ mod logbuf;
 mod tui;
 
 use std::path::Path;
-use std::process::Command as ProcCommand;
 
 use anyhow::{bail, Context};
 use clap::{Args, Parser, Subcommand};
@@ -531,9 +530,9 @@ fn cmd_upload(args: UploadArgs, device: Option<netmd::DeviceSelector>) -> anyhow
 ///
 /// - If the input is an ATRAC3 WAV, its payload is used directly (header
 ///   stripped) and the requested format is ignored (the file dictates it).
-/// - SP: transcode to big-endian s16 PCM via ffmpeg.
-/// - LP2/LP105/LP4: transcode to a 44.1 kHz stereo WAV via ffmpeg, encode as
-///   ATRAC3, then strip the resulting ATRAC3 WAV header.
+/// - SP: normalize to big-endian s16 PCM via `rmd_audio`.
+/// - LP2/LP105/LP4: normalize to a 44.1 kHz stereo WAV via `rmd_audio`, encode
+///   as ATRAC3, then strip the resulting ATRAC3 WAV header.
 fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Vec<u8>)> {
     let raw = std::fs::read(input).with_context(|| format!("reading {input}"))?;
 
@@ -545,21 +544,13 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Ve
 
     match requested {
         "sp" => {
-            // ffmpeg -i in -ac 2 -ar 44100 -f s16be out.raw
-            let out = temp_path("raw");
-            run_ffmpeg(&[
-                "-y", "-i", input, "-ac", "2", "-ar", "44100", "-f", "s16be", &out,
-            ])?;
-            let data = std::fs::read(&out)?;
-            let _ = std::fs::remove_file(&out);
+            let data = rmd_audio::decode_to_s16be_44100_stereo(input)
+                .with_context(|| format!("normalizing {input} to 44.1 kHz stereo s16be"))?;
             Ok((Wireformat::Pcm, data))
         }
         "lp2" | "lp105" | "lp4" => {
-            // First make a clean 44.1k stereo WAV via ffmpeg.
-            let wav_in = temp_path("wav");
-            run_ffmpeg(&[
-                "-y", "-i", input, "-ar", "44100", "-ac", "2", "-f", "wav", &wav_in,
-            ])?;
+            let wav_data = rmd_audio::decode_to_wav_44100_stereo(input)
+                .with_context(|| format!("normalizing {input} to 44.1 kHz stereo WAV"))?;
 
             // Encode to ATRAC3 (RIFF container) using the local atracdenc crate.
             let (codec, bitrate, wf) = match requested {
@@ -568,9 +559,6 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Ve
                 "lp4" => (atracdenc::Codec::Atrac3Lp4, 64, Wireformat::Lp4),
                 _ => unreachable!(),
             };
-            let wav_data = std::fs::read(&wav_in)
-                .with_context(|| format!("reading normalized WAV {wav_in}"))?;
-            let _ = std::fs::remove_file(&wav_in);
             let encoded = atracdenc::EncodeBuilder::new()
                 .codec(codec)
                 .container(atracdenc::Container::Riff)
@@ -591,29 +579,4 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Ve
         }
         other => bail!("unknown format {other:?} (expected sp, lp2, lp105, lp4)"),
     }
-}
-
-fn temp_path(ext: &str) -> String {
-    let dir = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    dir.join(format!("rmd_{nanos}.{ext}"))
-        .to_string_lossy()
-        .into_owned()
-}
-
-fn run_ffmpeg(args: &[&str]) -> anyhow::Result<()> {
-    let bin = std::env::var("FFMPEG").unwrap_or_else(|_| "ffmpeg".to_string());
-    let status = ProcCommand::new(&bin)
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to run ffmpeg (is it installed?)")?;
-    if !status.success() {
-        bail!("ffmpeg failed with status {status}");
-    }
-    Ok(())
 }

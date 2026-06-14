@@ -5,6 +5,7 @@ use log::debug;
 use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
+    error::Result,
     playback::{get_playback_status2, get_position},
     status::get_status,
     types::{DeviceStatus, PlaybackState, PlaybackTime},
@@ -12,7 +13,7 @@ use crate::{
 
 /// Returns a comprehensive playback status snapshot. Mirrors
 /// `getDeviceStatus` (`netmd-commands.ts:131`).
-pub fn get_device_status<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<DeviceStatus> {
+pub fn get_device_status<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<DeviceStatus> {
     debug!("get device status");
     let status = get_status(handle)?;
     let playback_status2 = get_playback_status2(handle)?;
@@ -63,8 +64,8 @@ fn derive_device_status(
     });
 
     // While reading the TOC or with no disc, treat as "not present".
-    let disc_present_effective = disc_present
-        && !matches!(state, PlaybackState::ReadingToc | PlaybackState::NoDisc);
+    let disc_present_effective =
+        disc_present && !matches!(state, PlaybackState::ReadingToc | PlaybackState::NoDisc);
 
     DeviceStatus {
         disc_present: disc_present_effective,
@@ -81,10 +82,7 @@ mod tests {
     #[test]
     fn operating_status_word_from_block2() {
         let block = [0, 0, 0, 0, 0xc3, 0x75];
-        assert_eq!(
-            playback_status2_to_operating_status(&block),
-            Some(0xc375)
-        );
+        assert_eq!(playback_status2_to_operating_status(&block), Some(0xc375));
         assert_eq!(playback_status2_to_operating_status(&[0, 1, 2]), None);
     }
 

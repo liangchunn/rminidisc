@@ -13,7 +13,7 @@ use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
     descriptor::{change_descriptor_state, Descriptor, DescriptorAction},
-    error::NetMDError,
+    error::{NetMDError, Result},
     transport::{send_query, send_query_ext},
     util::{parse_bcd_u8, parse_u16},
 };
@@ -38,7 +38,7 @@ enum TrackChange {
 }
 
 /// Issues a transport action. Mirrors `NetMDInterface._play` (`:361`).
-fn play_action<T: UsbContext>(handle: &DeviceHandle<T>, action: Action) -> anyhow::Result<()> {
+fn play_action<T: UsbContext>(handle: &DeviceHandle<T>, action: Action) -> Result<()> {
     let query = format!("00 18c3 ff {:02x} 000000", action as u8);
     let reply = send_query(handle, query)?;
     reply.scan("%? 18c3 00 %b 000000")?;
@@ -46,25 +46,25 @@ fn play_action<T: UsbContext>(handle: &DeviceHandle<T>, action: Action) -> anyho
 }
 
 /// Starts playback. Mirrors `NetMDInterface.play`.
-pub fn play<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn play<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("play");
     play_action(handle, Action::Play)
 }
 
 /// Pauses playback. Mirrors `NetMDInterface.pause`.
-pub fn pause<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn pause<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("pause");
     play_action(handle, Action::Pause)
 }
 
 /// Fast-forwards. Mirrors `NetMDInterface.fast_forward`.
-pub fn fast_forward<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn fast_forward<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("fast forward");
     play_action(handle, Action::FastForward)
 }
 
 /// Rewinds. Mirrors `NetMDInterface.rewind`.
-pub fn rewind<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn rewind<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("rewind");
     play_action(handle, Action::Rewind)
 }
@@ -72,7 +72,7 @@ pub fn rewind<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
 /// Stops playback. Mirrors `NetMDInterface.stop` (`:383`).
 ///
 /// As in the JS reference, errors are swallowed (a fix for the Sony LAM-1).
-pub fn stop<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn stop<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("stop");
     match send_query(handle, "00 18c5 ff 00000000") {
         Ok(reply) => {
@@ -85,7 +85,7 @@ pub fn stop<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
 
 /// Seeks to the start of `track` (0-based). Mirrors `NetMDInterface.gotoTrack`
 /// (`:393`). Returns the resulting track index.
-pub fn goto_track<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> anyhow::Result<u16> {
+pub fn goto_track<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> Result<u16> {
     debug!("goto track #{track}");
     let query = format!("00 1850 ff010000 0000 {:04x}", track);
     let reply = send_query(handle, query)?;
@@ -95,11 +95,7 @@ pub fn goto_track<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> anyhow
 
 /// Seeks to a time within `track` (0-based). `time` is `[hour, minute, second,
 /// frame]`. Mirrors `NetMDInterface.gotoTime` (`:400`).
-pub fn goto_time<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    track: u16,
-    time: [u8; 4],
-) -> anyhow::Result<()> {
+pub fn goto_time<T: UsbContext>(handle: &DeviceHandle<T>, track: u16, time: [u8; 4]) -> Result<()> {
     debug!("goto time #{track} {time:?}");
     let query = format!(
         "00 1850 ff000000 0000 {:04x} {:02x}{:02x}{:02x}{:02x}",
@@ -111,10 +107,7 @@ pub fn goto_time<T: UsbContext>(
 }
 
 /// Issues a track-change. Mirrors `NetMDInterface._trackChange` (`:408`).
-fn track_change<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    direction: TrackChange,
-) -> anyhow::Result<()> {
+fn track_change<T: UsbContext>(handle: &DeviceHandle<T>, direction: TrackChange) -> Result<()> {
     let query = format!("00 1850 ff10 00000000 {:04x}", direction as u16);
     let reply = send_query(handle, query)?;
     reply.scan("%? 1850 0010 00000000 %?%?")?;
@@ -122,25 +115,25 @@ fn track_change<T: UsbContext>(
 }
 
 /// Skips to the next track. Mirrors `NetMDInterface.nextTrack`.
-pub fn next_track<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn next_track<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("next track");
     track_change(handle, TrackChange::Next)
 }
 
 /// Skips to the previous track. Mirrors `NetMDInterface.previousTrack`.
-pub fn previous_track<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn previous_track<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("previous track");
     track_change(handle, TrackChange::Previous)
 }
 
 /// Restarts the current track. Mirrors `NetMDInterface.restartTrack`.
-pub fn restart_track<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn restart_track<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("restart track");
     track_change(handle, TrackChange::Restart)
 }
 
 /// Ejects the disc. Mirrors `NetMDInterface.ejectDisc` (`:347`).
-pub fn eject_disc<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn eject_disc<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("eject disc");
     send_query(handle, "00 18c1 ff 6000")?;
     Ok(())
@@ -160,7 +153,7 @@ fn get_playback_status<T: UsbContext>(
     handle: &DeviceHandle<T>,
     p1: u16,
     p2: u16,
-) -> anyhow::Result<Vec<u8>> {
+) -> Result<Vec<u8>> {
     change_descriptor_state(
         handle,
         Descriptor::OperatingStatusBlock,
@@ -187,13 +180,13 @@ fn get_playback_status<T: UsbContext>(
 }
 
 /// Reads playback status block 1. Mirrors `NetMDInterface.getPlaybackStatus1`.
-pub fn get_playback_status1<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<Vec<u8>> {
+pub fn get_playback_status1<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Vec<u8>> {
     trace!("get playback status 1");
     get_playback_status(handle, 0x8801, 0x8807)
 }
 
 /// Reads playback status block 2. Mirrors `NetMDInterface.getPlaybackStatus2`.
-pub fn get_playback_status2<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<Vec<u8>> {
+pub fn get_playback_status2<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Vec<u8>> {
     trace!("get playback status 2");
     get_playback_status(handle, 0x8802, 0x8806)
 }
@@ -203,9 +196,7 @@ pub fn get_playback_status2<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::
 ///
 /// Returns `Ok(None)` when the device rejects the command (no current
 /// position), matching the JS `null` return.
-pub fn get_position<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-) -> anyhow::Result<Option<[u32; 5]>> {
+pub fn get_position<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Option<[u32; 5]>> {
     trace!("get position");
     change_descriptor_state(
         handle,
@@ -215,16 +206,16 @@ pub fn get_position<T: UsbContext>(
     let query = "00 1809 8001 0430 8802 0030 8805 0030 0003 0030 0002 00 ff00 00000000";
     let reply = match send_query(handle, query) {
         Ok(reply) => reply,
-        Err(e) => {
+        Err(NetMDError::Rejected(_)) => {
             // A rejected command means "no position available" (JS returns null).
-            if let Some(NetMDError::Rejected(_)) = e.downcast_ref::<NetMDError>() {
-                let _ = change_descriptor_state(
-                    handle,
-                    Descriptor::OperatingStatusBlock,
-                    DescriptorAction::Close,
-                );
-                return Ok(None);
-            }
+            let _ = change_descriptor_state(
+                handle,
+                Descriptor::OperatingStatusBlock,
+                DescriptorAction::Close,
+            );
+            return Ok(None);
+        }
+        Err(e) => {
             return Err(e);
         }
     };
@@ -248,17 +239,14 @@ pub fn get_position<T: UsbContext>(
 
 /// Reads `(channel_count_byte, encoding_byte)` recording parameters.
 /// Mirrors `NetMDInterface.getRecordingParameters` (`:700`).
-pub fn get_recording_parameters<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-) -> anyhow::Result<[u8; 2]> {
+pub fn get_recording_parameters<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<[u8; 2]> {
     trace!("get recording parameters");
     change_descriptor_state(
         handle,
         Descriptor::OperatingStatusBlock,
         DescriptorAction::OpenRead,
     )?;
-    let query =
-        "00 1809 8001 0330 8801 0030 8805 0030 8807 00 ff00 00000000";
+    let query = "00 1809 8001 0330 8801 0030 8805 0030 8807 00 ff00 00000000";
     let reply = send_query(handle, query)?;
     let data = reply.scan(
         "%? 1809 8001 0330 8801 0030 8805 0030 8807 00 1000 000e0000 000c 8805 0008 80e0 0110 %b %b 4000",

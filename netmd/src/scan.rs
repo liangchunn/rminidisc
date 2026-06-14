@@ -1,6 +1,6 @@
-use anyhow::anyhow;
+use crate::error::{NetMDError, Result};
 
-pub fn scan<'a>(template: &'a str, data: &'a [u8]) -> anyhow::Result<Vec<&'a [u8]>> {
+pub fn scan<'a>(template: &'a str, data: &'a [u8]) -> Result<Vec<&'a [u8]>> {
     let mut index = 0;
     let mut buf = String::new();
     let mut result = vec![];
@@ -16,84 +16,113 @@ pub fn scan<'a>(template: &'a str, data: &'a [u8]) -> anyhow::Result<Vec<&'a [u8
                 continue;
             }
             if !matches!(char, 'a'..='z' | 'A'..='Z' | '0'..='9' | '%' | '?' | '*' | '#') {
-                anyhow::bail!("invalid character '{}'", char)
+                return Err(NetMDError::Scan(format!("invalid character '{char}'")));
             }
             buf.push(char);
         }
         if buf.len() == 2 {
             if buf.starts_with('%') {
-                let specifier =
-                    (*buf.as_bytes().get(1).ok_or(anyhow!("missing specifier"))?) as char;
+                let specifier = (*buf
+                    .as_bytes()
+                    .get(1)
+                    .ok_or_else(|| NetMDError::Scan("missing specifier".to_string()))?)
+                    as char;
                 match specifier {
                     '?' => {
                         index += 1;
                     }
                     'b' => {
-                        let slice = data.get(index..index + 1).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data
+                            .get(index..index + 1)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += 1;
                     }
                     'w' => {
-                        let slice = data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data
+                            .get(index..index + 2)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += 2;
                     }
                     'd' => {
-                        let slice = data.get(index..index + 4).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data
+                            .get(index..index + 4)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += 4;
                     }
                     'q' => {
-                        let slice = data.get(index..index + 8).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data
+                            .get(index..index + 8)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += 8;
                     }
                     'B' => {
-                        let slice = data.get(index..index + 1).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data
+                            .get(index..index + 1)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += 1;
                     }
                     'W' => {
-                        let slice = data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
+                        let slice = data
+                            .get(index..index + 2)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += 2;
                     }
                     'x' | 's' => {
-                        let len_bytes =
-                            data.get(index..index + 2).ok_or(anyhow!("out of bounds"))?;
+                        let len_bytes = data
+                            .get(index..index + 2)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         let length = u16::from_be_bytes(<[u8; 2]>::try_from(len_bytes)?) as usize;
                         index += 2;
                         let slice = data
                             .get(index..index + length)
-                            .ok_or(anyhow!("out of bounds"))?;
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += length;
                     }
                     'z' => {
-                        let length = *data.get(index).ok_or(anyhow!("out of bounds"))? as usize;
+                        let length = *data
+                            .get(index)
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?
+                            as usize;
                         index += 1;
                         let slice = data
                             .get(index..index + length)
-                            .ok_or(anyhow!("out of bounds"))?;
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += length;
                     }
                     '*' | '#' => {
                         let slice = data
                             .get(index..data.len())
-                            .ok_or(anyhow!("out of bounds"))?;
+                            .ok_or_else(|| NetMDError::Scan("out of bounds".to_string()))?;
                         result.push(slice);
                         index += data.len() - index;
                     }
-                    _ => anyhow::bail!(format!("invalid format character {}", specifier)),
+                    _ => {
+                        return Err(NetMDError::Scan(format!(
+                            "invalid format character {specifier}"
+                        )));
+                    }
                 }
             } else {
-                let num = u8::from_str_radix(&buf, 16)?;
-                let compare = data.get(index).ok_or(anyhow!(format!(
-                    "format string contains '0x{num:02x}', but data buffer does not have this value"
-                )))?;
+                let num = u8::from_str_radix(&buf, 16).map_err(|source| {
+                    NetMDError::Scan(format!("invalid hex byte {buf}: {source}"))
+                })?;
+                let compare = data.get(index).ok_or_else(|| {
+                    NetMDError::Scan(format!(
+                        "format string contains '0x{num:02x}', but data buffer does not have this value"
+                    ))
+                })?;
                 if num != *compare {
-                    anyhow::bail!(format!("expected {compare}, got {num}"));
+                    return Err(NetMDError::Scan(format!(
+                        "expected 0x{num:02x}, got 0x{compare:02x}"
+                    )));
                 }
 
                 index += 1;
@@ -102,10 +131,14 @@ pub fn scan<'a>(template: &'a str, data: &'a [u8]) -> anyhow::Result<Vec<&'a [u8
         }
     }
     if !buf.is_empty() {
-        anyhow::bail!("invalid format, unmatched character '{}'", buf)
+        return Err(NetMDError::Scan(format!(
+            "invalid format, unmatched character '{buf}'"
+        )));
     }
     if index != data.len() {
-        anyhow::bail!("data buffer contains unparsed residual data")
+        return Err(NetMDError::Scan(
+            "data buffer contains unparsed residual data".to_string(),
+        ));
     }
     Ok(result)
 }

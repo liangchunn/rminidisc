@@ -7,6 +7,7 @@ use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
     crypto::{self, EncryptedPacket},
+    error::{NetMDError, Result},
     query::QueryBuilder,
     status::get_operating_status,
     transport::{read_reply_after_bulk, read_reply_length, send_query, send_query_ext, write_bulk},
@@ -25,7 +26,7 @@ use crate::{
 const SECURE_PREFIX: &str = "00 1800 080046 f0030103";
 
 /// Acquires the device lock (`ff 010c ...`). Mirrors `NetMDInterface.acquire`.
-pub fn acquire<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn acquire<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("acquire");
     let reply = send_query(handle, "00 ff 010c ffff ffff ffff ffff ffff ffff")?;
     reply.scan("%? ff 010c ffff ffff ffff ffff ffff ffff")?;
@@ -33,7 +34,7 @@ pub fn acquire<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
 }
 
 /// Releases the device lock (`ff 0100 ...`). Mirrors `NetMDInterface.release`.
-pub fn release<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn release<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("release");
     let reply = send_query(handle, "00 ff 0100 ffff ffff ffff ffff ffff ffff")?;
     reply.scan("%? ff 0100 ffff ffff ffff ffff ffff ffff")?;
@@ -41,7 +42,7 @@ pub fn release<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
 }
 
 /// Enters a secure session. Mirrors `enterSecureSession` (`netmd-interface.ts:729`).
-pub fn enter_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn enter_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("enter secure session");
     let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("80 ff")?;
     let reply = send_query(handle, query)?;
@@ -50,7 +51,7 @@ pub fn enter_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::
 }
 
 /// Leaves a secure session. Mirrors `leaveSecureSession` (`netmd-interface.ts:735`).
-pub fn leave_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn leave_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("leave secure session");
     let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("81 ff")?;
     let reply = send_query(handle, query)?;
@@ -59,7 +60,7 @@ pub fn leave_secure_session<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::
 }
 
 /// Reads the device leaf ID. Mirrors `getLeafID` (`netmd-interface.ts:747`).
-pub fn get_leaf_id<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<Vec<u8>> {
+pub fn get_leaf_id<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Vec<u8>> {
     debug!("get leaf id");
     let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("11 ff")?;
     let reply = send_query(handle, query)?;
@@ -74,10 +75,12 @@ pub fn send_key_data<T: UsbContext>(
     key_chain: &[[u8; 16]],
     depth: u8,
     signature: &[u8; 24],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     debug!("send key data (ekb_id=0x{ekb_id:08x} depth={depth})");
     if !(1..=63).contains(&depth) {
-        anyhow::bail!("invalid EKB depth: {depth}");
+        return Err(NetMDError::InvalidInput(format!(
+            "invalid EKB depth: {depth}"
+        )));
     }
     let chain_len = key_chain.len() as u32;
     let databytes = 16 + 16 * chain_len + 24;
@@ -110,7 +113,7 @@ pub fn send_key_data<T: UsbContext>(
 pub fn session_key_exchange<T: UsbContext>(
     handle: &DeviceHandle<T>,
     host_nonce: &[u8; 8],
-) -> anyhow::Result<[u8; 8]> {
+) -> Result<[u8; 8]> {
     debug!("session key exchange");
     let query = QueryBuilder::new()
         .raw(SECURE_PREFIX)?
@@ -121,12 +124,12 @@ pub fn session_key_exchange<T: UsbContext>(
     let data = reply.scan("%? 1800 080046 f0030103 20 %? 000000 %#")?;
     let dev_nonce: [u8; 8] = data[0]
         .try_into()
-        .map_err(|_| anyhow::anyhow!("device nonce wrong length"))?;
+        .map_err(|_| NetMDError::UnexpectedResponse("device nonce wrong length".to_string()))?;
     Ok(dev_nonce)
 }
 
 /// Forgets the session key. Mirrors `sessionKeyForget` (`netmd-interface.ts:792`).
-pub fn session_key_forget<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn session_key_forget<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("session key forget");
     let query = QueryBuilder::new()
         .raw(SECURE_PREFIX)?
@@ -145,7 +148,7 @@ pub fn setup_download<T: UsbContext>(
     content_id: &[u8; 20],
     kek: &[u8; 8],
     session_key: &[u8; 8],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     debug!("setup download");
     let mut message = Vec::with_capacity(32);
     message.extend_from_slice(&[1, 1, 1, 1]);
@@ -167,7 +170,7 @@ pub fn setup_download<T: UsbContext>(
 pub fn disable_new_track_protection<T: UsbContext>(
     handle: &DeviceHandle<T>,
     val: u16,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     debug!("disable new track protection ({val})");
     let query = QueryBuilder::new()
         .raw(SECURE_PREFIX)?
@@ -185,7 +188,7 @@ pub fn commit_track<T: UsbContext>(
     handle: &DeviceHandle<T>,
     track: u16,
     session_key: &[u8; 8],
-) -> anyhow::Result<()> {
+) -> Result<()> {
     debug!("commit track #{track}");
     let authentication = crypto::des_ecb_encrypt(session_key, &[0u8; 8]);
     let query = QueryBuilder::new()
@@ -199,7 +202,7 @@ pub fn commit_track<T: UsbContext>(
 }
 
 /// Terminates the secure session lifecycle. Mirrors `terminate` (`netmd-interface.ts:909`).
-pub fn terminate<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn terminate<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("terminate");
     let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("2a ff00")?;
     // JS does not scan the reply.
@@ -221,9 +224,13 @@ pub fn send_track<T: UsbContext>(
     packets: &[EncryptedPacket],
     session_key: &[u8; 8],
     mut progress: Option<&mut dyn FnMut(u64, u64)>,
-) -> anyhow::Result<(u16, String, String)> {
+) -> Result<(u16, String, String)> {
     debug!("send track (wf=0x{wireformat:02x} df=0x{discformat:02x} frames={frames})");
-    info!("sending track: {} packets, {} total bytes", packets.len(), pkt_size + 24);
+    info!(
+        "sending track: {} packets, {} total bytes",
+        packets.len(),
+        pkt_size + 24
+    );
     // The sharps are slow...
     sleep(Duration::from_millis(200));
 
@@ -284,7 +291,11 @@ pub fn send_track<T: UsbContext>(
 
     // Decrypt the reply with DES-CBC (zero IV) under the session key.
     let decrypted: Cow<[u8]> = if encrypted_reply.len() % 8 == 0 && !encrypted_reply.is_empty() {
-        Cow::Owned(crypto::des_cbc_decrypt(session_key, &[0u8; 8], encrypted_reply))
+        Cow::Owned(crypto::des_cbc_decrypt(
+            session_key,
+            &[0u8; 8],
+            encrypted_reply,
+        ))
     } else {
         Cow::Borrowed(encrypted_reply)
     };
@@ -300,7 +311,7 @@ fn hex_string(bytes: &[u8]) -> String {
 
 /// Waits until the device is ready/blank for a download, then acquires it and
 /// disables new-track protection. Mirrors `prepareDownload` (`netmd-commands.ts:444`).
-pub fn prepare_download<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn prepare_download<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     debug!("prepare download");
     // Wait for the device to be ready or for a blank disc.
     for i in 0..50 {

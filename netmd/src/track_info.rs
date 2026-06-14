@@ -1,9 +1,9 @@
-use anyhow::bail;
 use log::{debug, info, trace};
 use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
     descriptor::{change_descriptor_state, Descriptor, DescriptorAction},
+    error::{NetMDError, Result},
     scan::scan,
     title::{sanitize_full_width_title, sanitize_half_width_title},
     transport::send_query,
@@ -19,7 +19,7 @@ pub fn get_track_title<T: UsbContext>(
     handle: &DeviceHandle<T>,
     track: u16,
     w_char: bool,
-) -> anyhow::Result<String> {
+) -> Result<String> {
     trace!("get track title #{track} (wchar={w_char})");
     let wchar_value: u8 = if w_char { 3 } else { 2 };
     let descriptor = if w_char {
@@ -39,7 +39,7 @@ pub fn get_track_title<T: UsbContext>(
     Ok(title)
 }
 
-pub fn get_track_count<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<u8> {
+pub fn get_track_count<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<u8> {
     debug!("get track count");
     change_descriptor_state(
         handle,
@@ -51,7 +51,9 @@ pub fn get_track_count<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Resul
     let data = reply.scan("%? 1806 02101001 %?%? %?%? 1000 00%?0000 0006 0010000200%b")?;
 
     let [tc] = &data[..] else {
-        anyhow::bail!("unexpected scan result count");
+        return Err(NetMDError::UnexpectedResponse(
+            "unexpected scan result count".to_string(),
+        ));
     };
     let track_count = parse_u8(tc)?;
     change_descriptor_state(handle, Descriptor::AudioContentsTd, DescriptorAction::Close)?;
@@ -72,7 +74,7 @@ pub fn set_track_title<T: UsbContext>(
     track: u16,
     title: &str,
     w_char: bool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     debug!("set track title #{track}: {title:?} (wchar={w_char})");
     let title = sanitize_title(title, w_char);
     let wchar_value: u8 = if w_char { 3 } else { 2 };
@@ -115,7 +117,7 @@ pub fn get_track_info<T: UsbContext>(
     track: u16,
     p1: u16,
     p2: u16,
-) -> anyhow::Result<Vec<u8>> {
+) -> Result<Vec<u8>> {
     trace!("get track info #{track} (p1=0x{p1:04x} p2=0x{p2:04x})");
     change_descriptor_state(
         handle,
@@ -134,10 +136,7 @@ pub fn get_track_info<T: UsbContext>(
 }
 
 /// Reads a track's length as `[h, m, s, f]`. Mirrors `getTrackLength`.
-pub fn get_track_length<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    track: u16,
-) -> anyhow::Result<[u32; 4]> {
+pub fn get_track_length<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> Result<[u32; 4]> {
     trace!("get track length #{track}");
     let raw = get_track_info(handle, track, 0x3000, 0x0100)?;
     let data = scan("0001 0006 0000 %B %B %B %B", &raw)?;
@@ -153,7 +152,7 @@ pub fn get_track_length<T: UsbContext>(
 pub fn get_track_encoding<T: UsbContext>(
     handle: &DeviceHandle<T>,
     track: u16,
-) -> anyhow::Result<(Encoding, ChannelCount)> {
+) -> Result<(Encoding, ChannelCount)> {
     trace!("get track encoding #{track}");
     let raw = get_track_info(handle, track, 0x3080, 0x0700)?;
     let data = scan("8007 0004 0110 %b %b", &raw)?;
@@ -163,25 +162,29 @@ pub fn get_track_encoding<T: UsbContext>(
     ))
 }
 
-fn track_encoding_from_byte(value: u8) -> anyhow::Result<Encoding> {
+fn track_encoding_from_byte(value: u8) -> Result<Encoding> {
     match value {
         value if value == Encoding::Sp as u8 => Ok(Encoding::Sp),
         value if value == Encoding::Lp2 as u8 => Ok(Encoding::Lp2),
         value if value == Encoding::Lp4 as u8 => Ok(Encoding::Lp4),
-        _ => bail!("unknown track encoding: 0x{value:02x}"),
+        _ => Err(NetMDError::UnexpectedResponse(format!(
+            "unknown track encoding: 0x{value:02x}"
+        ))),
     }
 }
 
-fn channel_count_from_byte(value: u8) -> anyhow::Result<ChannelCount> {
+fn channel_count_from_byte(value: u8) -> Result<ChannelCount> {
     match value {
         0x00 => Ok(ChannelCount::Stereo),
         0x01 => Ok(ChannelCount::Mono),
-        _ => bail!("unknown channel count: 0x{value:02x}"),
+        _ => Err(NetMDError::UnexpectedResponse(format!(
+            "unknown channel count: 0x{value:02x}"
+        ))),
     }
 }
 
 /// Reads a track's flags. Mirrors `NetMDInterface.getTrackFlags`. `track` is 0-based.
-pub fn get_track_flags<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> anyhow::Result<u8> {
+pub fn get_track_flags<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> Result<u8> {
     trace!("get track flags #{track}");
     change_descriptor_state(
         handle,
@@ -198,7 +201,7 @@ pub fn get_track_flags<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> a
 
 /// Erases a single track. Mirrors `NetMDInterface.eraseTrack`. `track` is 0-based.
 /// DESTRUCTIVE.
-pub fn erase_track<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> anyhow::Result<()> {
+pub fn erase_track<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> Result<()> {
     info!("erase track #{track}");
     let query = format!("00 1840 ff01 00 201001 {:04x}", track);
     // JS does not scan the reply for this command.
@@ -208,11 +211,7 @@ pub fn erase_track<T: UsbContext>(handle: &DeviceHandle<T>, track: u16) -> anyho
 
 /// Moves a track from `source` to `dest` (0-based). Mirrors `NetMDInterface.moveTrack`.
 /// DESTRUCTIVE (reorders disc).
-pub fn move_track<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    source: u16,
-    dest: u16,
-) -> anyhow::Result<()> {
+pub fn move_track<T: UsbContext>(handle: &DeviceHandle<T>, source: u16, dest: u16) -> Result<()> {
     info!("move track {source} -> {dest}");
     let query = format!("00 1843 ff00 00 201001 {:04x} 201001 {:04x}", source, dest);
     // JS does not scan the reply for this command.
@@ -221,7 +220,7 @@ pub fn move_track<T: UsbContext>(
 }
 
 /// Erases the entire disc. Mirrors `NetMDInterface.eraseDisc`. DESTRUCTIVE.
-pub fn erase_disc<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn erase_disc<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     info!("erase disc");
     let reply = send_query(handle, "00 1840 ff 0000")?;
     reply.scan("%? 1840 00 0000")?;

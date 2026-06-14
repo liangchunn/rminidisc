@@ -4,6 +4,7 @@ use rusb::{DeviceHandle, UsbContext};
 use crate::{
     descriptor::{change_descriptor_state, Descriptor, DescriptorAction},
     device::SHARP_VENDOR_ID,
+    error::{NetMDError, Result},
     scan::scan,
     title::{sanitize_full_width_title, sanitize_half_width_title},
     transport::send_query,
@@ -18,10 +19,7 @@ use crate::{
 ///
 /// Opens the audioContents + discTitle descriptors, reads all chunks, then
 /// closes them. `w_char` selects the full-width (wchar) title table.
-pub fn get_disk_title<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    w_char: bool,
-) -> anyhow::Result<String> {
+pub fn get_disk_title<T: UsbContext>(handle: &DeviceHandle<T>, w_char: bool) -> Result<String> {
     change_descriptor_state(
         handle,
         Descriptor::AudioContentsTd,
@@ -54,7 +52,9 @@ pub fn get_disk_title<T: UsbContext>(
             )?;
 
             let [cz, t, d] = &data[..] else {
-                anyhow::bail!("unexpected scan result count");
+                return Err(NetMDError::UnexpectedResponse(
+                    "unexpected scan result count".to_string(),
+                ));
             };
             chunk_size = parse_u16(cz)?;
             total = parse_u16(t)?;
@@ -63,7 +63,9 @@ pub fn get_disk_title<T: UsbContext>(
         } else {
             let data = reply.scan("%? 1806 02201801 00%? 3000 0a00 1000 %w%?%? %*")?;
             let [cz, d] = &data[..] else {
-                anyhow::bail!("unexpected scan result count");
+                return Err(NetMDError::UnexpectedResponse(
+                    "unexpected scan result count".to_string(),
+                ));
             };
             chunk_size = parse_u16(cz)?;
             sink.push(parse_string(d)?);
@@ -83,10 +85,7 @@ pub fn get_disk_title<T: UsbContext>(
 /// Mirrors `NetMDInterface.getDiscTitle`. If the raw title ends with the group
 /// delimiter (`//` or full-width `／／`), the leading `0;`/`０；` title cell is
 /// extracted; otherwise the title is cleared.
-pub fn get_disc_title<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    w_char: bool,
-) -> anyhow::Result<String> {
+pub fn get_disc_title<T: UsbContext>(handle: &DeviceHandle<T>, w_char: bool) -> Result<String> {
     trace!("get disc title (wchar={w_char})");
     Ok(disc_title_from_raw(
         &get_disk_title(handle, w_char)?,
@@ -137,7 +136,7 @@ pub fn set_disc_title<T: UsbContext>(
     handle: &DeviceHandle<T>,
     title: &str,
     w_char: bool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     debug!("set disc title: {title:?} (wchar={w_char})");
     let title = sanitize_title(title, w_char);
     let current_title = get_disk_title(handle, w_char)?;
@@ -192,7 +191,7 @@ pub fn rename_disc<T: UsbContext>(
     handle: &DeviceHandle<T>,
     title: &str,
     w_char: bool,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     trace!("rename disc to {title:?} (wchar={w_char})");
     let title = sanitize_title(title, w_char);
     let raw_title = get_disk_title(handle, w_char)?;
@@ -229,7 +228,7 @@ fn renamed_disc_raw_title(raw_title: &str, title: &str, w_char: bool) -> String 
 }
 
 /// Reads disc flags. Mirrors `NetMDInterface.getDiscFlags`.
-pub fn get_disc_flags<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<DiscFlags> {
+pub fn get_disc_flags<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<DiscFlags> {
     debug!("get disc flags");
     change_descriptor_state(handle, Descriptor::RootTd, DescriptorAction::OpenRead)?;
     let reply = send_query(handle, "00 1806 01101000 ff00 0001000b")?;
@@ -241,7 +240,7 @@ pub fn get_disc_flags<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result
 
 /// Reads disc capacity as three `[h,m,s,f]` time arrays:
 /// `[recorded, total, available]`. Mirrors `NetMDInterface.getDiscCapacity`.
-pub fn get_disc_capacity<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<[[u32; 4]; 3]> {
+pub fn get_disc_capacity<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<[[u32; 4]; 3]> {
     debug!("get disc capacity");
     change_descriptor_state(handle, Descriptor::RootTd, DescriptorAction::OpenRead)?;
     let reply = send_query(handle, "00 1806 02101000 3080 0300 ff00 00000000")?;
@@ -267,7 +266,7 @@ pub fn get_disc_capacity<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Res
 /// Mirrors `NetMDInterface._getDiscSubunitIdentifier`. The descriptor body is
 /// decoded to locate the supported-media-type specifications; the
 /// implementation profile ID of media type `0x301` is the NetMD level.
-pub fn get_disc_subunit_identifier<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<u8> {
+pub fn get_disc_subunit_identifier<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<u8> {
     debug!("get disc subunit identifier");
     change_descriptor_state(
         handle,
@@ -332,7 +331,9 @@ pub fn get_disc_subunit_identifier<T: UsbContext>(handle: &DeviceHandle<T>) -> a
         DescriptorAction::Close,
     )?;
 
-    net_md_level.ok_or_else(|| anyhow::anyhow!("NetMD level (media type 0x301) not found"))
+    net_md_level.ok_or_else(|| {
+        NetMDError::UnexpectedResponse("NetMD level (media type 0x301) not found".to_string())
+    })
 }
 
 #[cfg(test)]

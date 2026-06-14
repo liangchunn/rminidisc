@@ -1,3 +1,5 @@
+use crate::error::{NetMDError, Result};
+
 pub struct Query(pub Vec<u8>);
 
 impl From<Query> for Vec<u8> {
@@ -23,7 +25,7 @@ impl QueryBuilder {
 
     /// Appends static bytes parsed from a hex string (whitespace ignored).
     /// Mirrors the literal hex pairs in a `formatQuery` format string.
-    pub fn raw(mut self, hex: &str) -> anyhow::Result<Self> {
+    pub fn raw(mut self, hex: &str) -> Result<Self> {
         let q = Query::from_raw(hex)?;
         self.0.extend_from_slice(&q.0);
         Ok(self)
@@ -65,21 +67,27 @@ impl From<QueryBuilder> for Query {
 }
 
 impl Query {
-    pub fn from_raw(value: &str) -> anyhow::Result<Query> {
+    pub fn from_raw(value: &str) -> Result<Query> {
         let new_string = value
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect::<String>();
         if new_string.len() % 2 != 0 {
-            anyhow::bail!("invalid command length")
+            return Err(NetMDError::InvalidQuery(
+                "invalid command length".to_string(),
+            ));
         }
         let buf = new_string
             .chars()
             .collect::<Vec<char>>()
             .chunks(2)
             .map(|c| c.iter().collect::<String>())
-            .map(|bytes| u8::from_str_radix(&bytes, 16).unwrap())
-            .collect::<Vec<u8>>();
+            .map(|bytes| {
+                u8::from_str_radix(&bytes, 16).map_err(|source| {
+                    NetMDError::InvalidQuery(format!("invalid hex byte {bytes}: {source}"))
+                })
+            })
+            .collect::<Result<Vec<u8>>>()?;
 
         // insert 0x00 pad byte
         // buf.insert(0, 0x00);
@@ -89,17 +97,17 @@ impl Query {
 }
 
 impl TryFrom<&str> for Query {
-    type Error = anyhow::Error;
+    type Error = NetMDError;
 
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
         Query::from_raw(value)
     }
 }
 
 impl TryFrom<String> for Query {
-    type Error = anyhow::Error;
+    type Error = NetMDError;
 
-    fn try_from(value: String) -> Result<Self, Self::Error> {
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
         Query::from_raw(&value)
     }
 }

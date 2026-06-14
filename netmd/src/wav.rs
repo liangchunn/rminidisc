@@ -9,6 +9,7 @@
 
 use log::trace;
 
+use crate::error::{NetMDError, Result};
 use crate::types::Wireformat;
 
 /// Sony ATRAC3 WAVE format tag.
@@ -42,10 +43,10 @@ fn u32_le(b: &[u8], o: usize) -> u32 {
 }
 
 /// Parses a RIFF/WAVE file, locating the `fmt ` and `data` chunks.
-pub fn parse_wav(data: &[u8]) -> anyhow::Result<WavInfo> {
+pub fn parse_wav(data: &[u8]) -> Result<WavInfo> {
     trace!("parsing WAV: {} bytes", data.len());
     if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        anyhow::bail!("not a RIFF/WAVE file");
+        return Err(NetMDError::InvalidWav("not a RIFF/WAVE file".to_string()));
     }
 
     let mut fmt: Option<WavFmt> = None;
@@ -87,9 +88,9 @@ pub fn parse_wav(data: &[u8]) -> anyhow::Result<WavInfo> {
         }
     }
 
-    let fmt = fmt.ok_or_else(|| anyhow::anyhow!("missing fmt chunk"))?;
+    let fmt = fmt.ok_or_else(|| NetMDError::InvalidWav("missing fmt chunk".to_string()))?;
     let (data_offset, data_len) =
-        data_chunk.ok_or_else(|| anyhow::anyhow!("missing data chunk"))?;
+        data_chunk.ok_or_else(|| NetMDError::InvalidWav("missing data chunk".to_string()))?;
     Ok(WavInfo {
         fmt,
         data_offset,

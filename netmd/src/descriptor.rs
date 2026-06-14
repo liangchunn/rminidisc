@@ -1,6 +1,7 @@
 use log::trace;
 use rusb::{DeviceHandle, UsbContext};
 
+use crate::error::{NetMDError, Result};
 use crate::query::Query;
 use crate::transport::send_query;
 
@@ -55,7 +56,7 @@ pub fn change_descriptor_state<T: UsbContext>(
     handle: &DeviceHandle<T>,
     descriptor: Descriptor,
     action: DescriptorAction,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     trace!("change descriptor state: {descriptor:?} {action:?}");
     // The JS reference swallows descriptor errors; we propagate them so callers
     // can decide. Most descriptor open/close pairs are expected to succeed.
@@ -64,9 +65,9 @@ pub fn change_descriptor_state<T: UsbContext>(
 }
 
 impl TryFrom<DescriptorCommand> for Query {
-    type Error = anyhow::Error;
+    type Error = NetMDError;
 
-    fn try_from(value: DescriptorCommand) -> Result<Self, Self::Error> {
+    fn try_from(value: DescriptorCommand) -> std::result::Result<Self, Self::Error> {
         Query::from_raw(&format!(
             "00 1808 {} {} 00",
             value.0.as_str(),

@@ -41,18 +41,11 @@ Front-end for the `netmd` library. Subcommands:
 
 Select a device with `-d VID:PID` (e.g. `-d 054c:0084`).
 
-## Upload Dependencies
+## Upload Audio
 
-Uploading non-ATRAC3 audio requires external binaries:
+Uploading non-ATRAC3 audio is normalized in Rust with `symphonia` and `rubato`:
 
-- **ffmpeg** — PCM/SP conversion and WAV preparation
-- **[atracdenc](https://github.com/dcherednik/atracdenc)** — LP2/LP4 ATRAC3 encoding
+- SP uploads are decoded to stereo 44.1 kHz signed 16-bit big-endian PCM.
+- LP2/LP105/LP4 uploads are decoded to stereo 44.1 kHz PCM WAV, then encoded with the local `atracdenc` crate.
 
-Override their paths via environment variables:
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `FFMPEG` | `ffmpeg` | Path to ffmpeg binary |
-| `ATRACDENC` | `atracdenc` | Path to atracdenc binary |
-
-ATRAC3 `.wav` files are uploaded directly without transcoding.
+Supported source formats are the formats supported by `symphonia`'s enabled decoders. ATRAC3 `.wav` files are uploaded directly without transcoding.

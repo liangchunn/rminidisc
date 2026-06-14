@@ -135,7 +135,11 @@ pub struct EncryptedPacket {
 pub fn encrypt_packets(kek: &[u8; 8], frame_size: usize, data: &[u8]) -> Vec<EncryptedPacket> {
     use rand::Rng;
 
-    trace!("encrypt_packets: frame_size={} data_len={}", frame_size, data.len());
+    trace!(
+        "encrypt_packets: frame_size={} data_len={}",
+        frame_size,
+        data.len()
+    );
     let mut raw_key = [0u8; 8];
     rand::rng().fill_bytes(&mut raw_key);
 

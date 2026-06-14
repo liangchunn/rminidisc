@@ -10,6 +10,7 @@ use rusb::{DeviceHandle, UsbContext};
 
 use crate::crypto::{encrypt_packets, retailmac};
 use crate::ekb::get_ekb_for_device;
+use crate::error::Result;
 use crate::secure::{
     commit_track, enter_secure_session, get_leaf_id, leave_secure_session, prepare_download,
     release, send_key_data, send_track, session_key_exchange, session_key_forget, setup_download,
@@ -89,7 +90,7 @@ pub fn download_track<T: UsbContext>(
     vendor: u16,
     product: u16,
     progress: Option<&mut dyn FnMut(u64, u64)>,
-) -> anyhow::Result<(u16, String, String)> {
+) -> Result<(u16, String, String)> {
     info!(
         "downloading track '{}' (format={:?}, {} frames, {} bytes)",
         track.title,
@@ -147,11 +148,14 @@ fn download_track_inner<T: UsbContext>(
     track: &MdTrack,
     session_key: &[u8; 8],
     progress: Option<&mut dyn FnMut(u64, u64)>,
-) -> anyhow::Result<(u16, String, String)> {
+) -> Result<(u16, String, String)> {
     trace!("setting up download");
     setup_download(handle, &CONTENT_ID, &KEK, session_key)?;
 
-    trace!("encrypting packets (frame_size={})", frame_size(track.format));
+    trace!(
+        "encrypting packets (frame_size={})",
+        frame_size(track.format)
+    );
     let packets = encrypt_packets(&KEK, frame_size(track.format), &track.data);
     trace!("sending encrypted track");
     let (track_num, uuid, ccid) = send_track(

@@ -5,7 +5,7 @@ use log::trace;
 use rusb::{request_type, DeviceHandle, UsbContext};
 
 use crate::{
-    error::NetMDError,
+    error::{NetMDError, Result},
     query::Query,
     types::{
         ProtocolReply, ReadRequestData, ReadRequestHeader, INTERIM_RETRY_INTERVAL_MS,
@@ -31,12 +31,12 @@ const BULK_WRITE_CHUNK: usize = 0x10000;
 // TODO: to return concrete `.try_into()`` errors, use the return type:
 // TODO:    Result<ReadRequestData, M::Error>
 // TODO: and remove
-// TODO:    anyhow::Error: From<M::Error>
-pub fn send_query<T, M>(handle: &DeviceHandle<T>, message: M) -> anyhow::Result<ReadRequestData>
+// TODO:    NetMDError: From<M::Error>
+pub fn send_query<T, M>(handle: &DeviceHandle<T>, message: M) -> Result<ReadRequestData>
 where
     T: UsbContext,
     M: TryInto<Query>,
-    anyhow::Error: From<M::Error>,
+    NetMDError: From<M::Error>,
 {
     send_query_ext(handle, message, false)
 }
@@ -52,11 +52,11 @@ pub fn send_query_ext<T, M>(
     handle: &DeviceHandle<T>,
     message: M,
     accept_interim: bool,
-) -> anyhow::Result<ReadRequestData>
+) -> Result<ReadRequestData>
 where
     T: UsbContext,
     M: TryInto<Query>,
-    anyhow::Error: From<M::Error>,
+    NetMDError: From<M::Error>,
 {
     let query: Query = message.try_into()?;
     trace!("  TX -> {:02x?}", query.0);
@@ -85,7 +85,7 @@ where
 pub fn read_reply_checked<T: UsbContext>(
     handle: &DeviceHandle<T>,
     accept_interim: bool,
-) -> Result<ReadRequestData, NetMDError> {
+) -> Result<ReadRequestData> {
     let mut attempt: u32 = 0;
     while attempt < MAX_INTERIM_ATTEMPTS {
         let data = read_reply(handle)?;
@@ -129,7 +129,7 @@ pub fn read_reply_checked<T: UsbContext>(
 /// payload length. Mirrors `NetMD.getReplyLength`.
 pub fn read_reply_length<T: UsbContext>(
     handle: &DeviceHandle<T>,
-) -> Result<ReadRequestHeader, rusb::Error> {
+) -> std::result::Result<ReadRequestHeader, rusb::Error> {
     let mut reply_header = ReadRequestHeader::new();
     handle.read_control(
         request_type(
@@ -147,7 +147,9 @@ pub fn read_reply_length<T: UsbContext>(
     Ok(reply_header)
 }
 
-pub fn read_reply<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<ReadRequestData, rusb::Error> {
+pub fn read_reply<T: UsbContext>(
+    handle: &DeviceHandle<T>,
+) -> std::result::Result<ReadRequestData, rusb::Error> {
     // header is 4 bytes, of which the third byte is the length of the next message.
     // Poll until a non-zero length is reported, doubling the wait each attempt.
     let mut reply_header = read_reply_length(handle)?;
@@ -191,7 +193,7 @@ pub fn read_reply<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<ReadRequest
 /// is treated as "not ready yet" and retried up to an overall budget.
 pub(crate) fn read_reply_after_bulk<T: UsbContext>(
     handle: &DeviceHandle<T>,
-) -> Result<ReadRequestData, NetMDError> {
+) -> Result<ReadRequestData> {
     const MAX_POLLS: u32 = 200; // ~ up to a minute with the sleeps below.
     let mut polls = 0u32;
     let header = loop {
@@ -232,7 +234,7 @@ pub(crate) fn read_reply_after_bulk<T: UsbContext>(
 /// Writes data to the bulk OUT endpoint. Mirrors `NetMD.writeBulk` (`netmd.ts:231`),
 /// except it splits the write into [`BULK_WRITE_CHUNK`]-sized libusb calls (see
 /// the constant's docs) so large SP payloads transfer reliably.
-pub fn write_bulk<T: UsbContext>(handle: &DeviceHandle<T>, data: &[u8]) -> anyhow::Result<()> {
+pub fn write_bulk<T: UsbContext>(handle: &DeviceHandle<T>, data: &[u8]) -> Result<()> {
     let mut written = 0;
     while written < data.len() {
         let end = (written + BULK_WRITE_CHUNK).min(data.len());
@@ -245,7 +247,7 @@ pub fn write_bulk<T: UsbContext>(handle: &DeviceHandle<T>, data: &[u8]) -> anyho
                 Duration::from_millis(USB_TIMEOUT_MILLIS * 20),
             )?;
             if n == 0 {
-                anyhow::bail!("bulk write made no progress");
+                return Err(NetMDError::BulkWriteNoProgress);
             }
             off += n;
         }

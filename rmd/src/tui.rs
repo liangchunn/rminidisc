@@ -242,9 +242,10 @@ impl App {
         }
     }
 
-    fn transport<F>(&mut self, label: &str, f: F)
+    fn transport<F, E>(&mut self, label: &str, f: F)
     where
-        F: Fn(&DeviceHandle<GlobalContext>) -> anyhow::Result<()>,
+        F: Fn(&DeviceHandle<GlobalContext>) -> std::result::Result<(), E>,
+        E: std::fmt::Display,
     {
         match f(&self.handle) {
             Ok(()) => self.message = label.to_string(),

@@ -1,8 +1,9 @@
 use std::time::Duration;
 
-use anyhow::{bail, Context};
 use log::{debug, info};
 use rusb::{Device, DeviceHandle, GlobalContext, UsbContext};
+
+use crate::error::{NetMDError, Result};
 
 /// Sony USB vendor ID.
 pub const SONY_VENDOR_ID: u16 = 0x054c;
@@ -349,13 +350,13 @@ pub fn supported_device(vendor_id: u16, product_id: u16) -> Option<&'static Devi
 ///
 /// If exactly one supported device is connected, it is selected automatically.
 /// If multiple supported devices are connected, callers must pass a selector.
-pub fn open_device() -> anyhow::Result<DeviceHandle<GlobalContext>> {
+pub fn open_device() -> Result<DeviceHandle<GlobalContext>> {
     open_device_matching(None)
 }
 
 pub fn open_device_matching(
     selector: Option<DeviceSelector>,
-) -> anyhow::Result<DeviceHandle<GlobalContext>> {
+) -> Result<DeviceHandle<GlobalContext>> {
     let devices = rusb::devices()?
         .iter()
         .filter_map(connected_supported_device)
@@ -376,23 +377,23 @@ pub fn open_device_matching(
     let device = match devices.as_slice() {
         [] => {
             if let Some(selector) = selector {
-                bail!(
-                    "cannot find supported device {:04x}:{:04x}",
-                    selector.vendor_id,
-                    selector.product_id
-                );
+                return Err(NetMDError::DeviceNotFoundById {
+                    vendor_id: selector.vendor_id,
+                    product_id: selector.product_id,
+                });
             }
-            bail!("cannot find supported NetMD device");
+            return Err(NetMDError::DeviceNotFound);
         }
         [device] => device,
-        _ => bail!(
-            "multiple supported NetMD devices connected; specify one with --device <vid:pid>:\n{}",
-            devices
-                .iter()
-                .map(ConnectedDevice::display)
-                .collect::<Vec<_>>()
-                .join("\n")
-        ),
+        _ => {
+            return Err(NetMDError::MultipleSupportedDevices {
+                devices: devices
+                    .iter()
+                    .map(ConnectedDevice::display)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            });
+        }
     };
 
     let device_desc = device.device.device_descriptor()?;
@@ -405,7 +406,10 @@ pub fn open_device_matching(
     let handle = device
         .device
         .open()
-        .with_context(|| format!("failed to open USB device {device_id}"))?;
+        .map_err(|source| NetMDError::UsbContext {
+            context: format!("opening USB device {device_id}"),
+            source,
+        })?;
 
     if let Ok(langs) = handle.read_languages(Duration::from_secs(5)) {
         let manufacturer = langs
@@ -427,7 +431,10 @@ pub fn open_device_matching(
 
     handle
         .claim_interface(0)
-        .with_context(|| format!("failed to claim USB interface 0 on {device_id}"))?;
+        .map_err(|source| NetMDError::UsbContext {
+            context: format!("claiming USB interface 0 on {device_id}"),
+            source,
+        })?;
     Ok(handle)
 }
 
@@ -445,7 +452,7 @@ impl ConnectedDevice {
     }
 }
 
-pub fn list_connected_devices() -> anyhow::Result<Vec<&'static DeviceDefinition>> {
+pub fn list_connected_devices() -> Result<Vec<&'static DeviceDefinition>> {
     Ok(rusb::devices()?
         .iter()
         .filter_map(connected_supported_device)
@@ -460,7 +467,7 @@ fn connected_supported_device(device: Device<GlobalContext>) -> Option<Connected
 }
 
 /// Releases the claimed interface. Mirrors the runner's previous teardown.
-pub fn close_device<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<()> {
+pub fn close_device<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
     info!("closing device");
     handle.release_interface(0)?;
     Ok(())
@@ -468,7 +475,7 @@ pub fn close_device<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<(
 
 /// Returns the `(vendor_id, product_id)` of the device behind a handle. Used for
 /// EKB selection during secure download.
-pub fn device_ids<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<(u16, u16)> {
+pub fn device_ids<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<(u16, u16)> {
     let desc = handle.device().device_descriptor()?;
     Ok((desc.vendor_id(), desc.product_id()))
 }

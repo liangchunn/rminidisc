@@ -35,7 +35,7 @@ pub use disc::{
     get_disc_capacity, get_disc_flags, get_disc_subunit_identifier, get_disc_title, get_disk_title,
     rename_disc, set_disc_title,
 };
-pub use error::NetMDError as Error;
+pub use error::{NetMDError as Error, Result};
 pub use playback::{
     can_eject_disc, eject_disc, fast_forward, get_playback_status1, get_playback_status2,
     get_position, get_recording_parameters, goto_time, goto_track, next_track, pause, play,

@@ -254,7 +254,7 @@ impl ReadRequestHeader {
 pub struct ReadRequestData(pub Vec<u8>);
 
 impl ReadRequestData {
-    pub fn scan<'b, 'a: 'b>(&'a self, template: &'a str) -> Result<Vec<&'b [u8]>, anyhow::Error> {
+    pub fn scan<'b, 'a: 'b>(&'a self, template: &'a str) -> crate::error::Result<Vec<&'b [u8]>> {
         scan(template, &self.0)
     }
 }

@@ -3,13 +3,14 @@ use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
     descriptor::{change_descriptor_state, Descriptor, DescriptorAction},
+    error::{NetMDError, Result},
     transport::send_query,
     types::{FullOperatingStatus, OperatingStatus},
     util::parse_u8,
 };
 
 /// Reads the raw operating status block. Mirrors `NetMDInterface.getStatus`.
-pub fn get_status<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<Vec<u8>> {
+pub fn get_status<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Vec<u8>> {
     debug!("get status");
     change_descriptor_state(
         handle,
@@ -28,7 +29,7 @@ pub fn get_status<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<Vec
 }
 
 /// Returns true when a disc is present. Mirrors `NetMDInterface.isDiscPresent`.
-pub fn is_disc_present<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Result<bool> {
+pub fn is_disc_present<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<bool> {
     trace!("check disc present");
     let status = get_status(handle)?;
     Ok(status.get(4) == Some(&0x40))
@@ -39,7 +40,7 @@ pub fn is_disc_present<T: UsbContext>(handle: &DeviceHandle<T>) -> anyhow::Resul
 /// WARNING (from JS reference): does not work on all devices.
 pub fn get_full_operating_status<T: UsbContext>(
     handle: &DeviceHandle<T>,
-) -> anyhow::Result<FullOperatingStatus> {
+) -> Result<FullOperatingStatus> {
     debug!("get full operating status");
     change_descriptor_state(
         handle,
@@ -60,7 +61,9 @@ pub fn get_full_operating_status<T: UsbContext>(
         DescriptorAction::Close,
     )?;
     if operating_status.len() < 2 {
-        anyhow::bail!("unparsable operating status");
+        return Err(NetMDError::UnexpectedResponse(
+            "unparsable operating status".to_string(),
+        ));
     }
     let operating_status_number = ((operating_status[0] as u16) << 8) | operating_status[1] as u16;
     Ok(FullOperatingStatus {
@@ -78,9 +81,7 @@ fn operating_status_from_u16(value: u16) -> OperatingStatus {
 }
 
 /// Returns the operating status. Mirrors `getOperatingStatus`.
-pub fn get_operating_status<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-) -> anyhow::Result<OperatingStatus> {
+pub fn get_operating_status<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<OperatingStatus> {
     Ok(get_full_operating_status(handle)?.status)
 }
 

@@ -1,5 +1,7 @@
 use std::array::TryFromSliceError;
 
+use crate::error::NetMDError;
+
 pub fn parse_u16(buf: &[u8]) -> Result<u16, TryFromSliceError> {
     Ok(u16::from_be_bytes(<[u8; 2]>::try_from(buf)?))
 }
@@ -12,25 +14,29 @@ pub fn parse_u32(buf: &[u8]) -> Result<u32, TryFromSliceError> {
     Ok(u32::from_be_bytes(<[u8; 4]>::try_from(buf)?))
 }
 
-pub fn parse_string(buf: &[u8]) -> anyhow::Result<String> {
+pub fn parse_string(buf: &[u8]) -> crate::error::Result<String> {
     let (title, _encoding, errors) = encoding_rs::SHIFT_JIS.decode(buf);
 
     if errors {
-        anyhow::bail!("invalid SHIFT_JIS string")
+        return Err(NetMDError::TextEncoding(
+            "invalid SHIFT_JIS string".to_string(),
+        ));
     }
 
     Ok(title.to_string())
 }
 
-pub fn encode_to_sjis(utf8: &str) -> anyhow::Result<Vec<u8>> {
+pub fn encode_to_sjis(utf8: &str) -> crate::error::Result<Vec<u8>> {
     let (encoded, _encoding, errors) = encoding_rs::SHIFT_JIS.encode(utf8);
     if errors {
-        anyhow::bail!("invalid UTF-8 for SHIFT_JIS encoding")
+        return Err(NetMDError::TextEncoding(
+            "invalid UTF-8 for SHIFT_JIS encoding".to_string(),
+        ));
     }
     Ok(encoded.into_owned())
 }
 
-pub fn get_length_after_sjis_encode(utf8: &str) -> anyhow::Result<usize> {
+pub fn get_length_after_sjis_encode(utf8: &str) -> crate::error::Result<usize> {
     Ok(encode_to_sjis(utf8)?.len())
 }
 

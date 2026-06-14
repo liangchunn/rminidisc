@@ -1,0 +1,14 @@
+[package]
+name = "rmd-audio"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rmd_audio"
+path = "src/lib.rs"
+
+[dependencies]
+hound = "3.5.1"
+rubato = "3.0.0"
+symphonia = { version = "0.6.0", features = ["all"] }
+thiserror = "2.0.18"
