@@ -530,8 +530,8 @@ fn cmd_upload(args: UploadArgs, device: Option<netmd::DeviceSelector>) -> anyhow
 ///
 /// - If the input is an ATRAC3 WAV, its payload is used directly (header
 ///   stripped) and the requested format is ignored (the file dictates it).
-/// - SP: normalize to big-endian s16 PCM via `rmd_audio`.
-/// - LP2/LP105/LP4: normalize to a 44.1 kHz stereo WAV via `rmd_audio`, encode
+/// - SP: normalize to big-endian s16 PCM via `minidisc_audio`.
+/// - LP2/LP105/LP4: normalize to a 44.1 kHz stereo WAV via `minidisc_audio`, encode
 ///   as ATRAC3, then strip the resulting ATRAC3 WAV header.
 fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Vec<u8>)> {
     let raw = std::fs::read(input).with_context(|| format!("reading {input}"))?;
@@ -544,12 +544,12 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Ve
 
     match requested {
         "sp" => {
-            let data = rmd_audio::decode_to_s16be_44100_stereo(input)
+            let data = minidisc_audio::decode_to_s16be_44100_stereo(input)
                 .with_context(|| format!("normalizing {input} to 44.1 kHz stereo s16be"))?;
             Ok((Wireformat::Pcm, data))
         }
         "lp2" | "lp105" | "lp4" => {
-            let wav_data = rmd_audio::decode_to_wav_44100_stereo(input)
+            let wav_data = minidisc_audio::decode_to_wav_44100_stereo(input)
                 .with_context(|| format!("normalizing {input} to 44.1 kHz stereo WAV"))?;
 
             // Encode to ATRAC3 (RIFF container) using the local atracdenc crate.

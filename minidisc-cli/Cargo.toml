@@ -1,15 +1,15 @@
 [package]
-name = "rmd"
+name = "minidisc-cli"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "rmd"
+name = "minidisc-cli"
 path = "src/main.rs"
 
 [dependencies]
 netmd = { path = "../netmd" }
-rmd-audio = { path = "../rmd-audio" }
+minidisc-audio = { path = "../minidisc-audio" }
 anyhow = "1.0.102"
 env_logger = "0.11.10"
 log = "0.4.32"

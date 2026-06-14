@@ -1,10 +1,10 @@
 [package]
-name = "rmd-audio"
+name = "minidisc-audio"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "rmd_audio"
+name = "minidisc_audio"
 path = "src/lib.rs"
 
 [dependencies]

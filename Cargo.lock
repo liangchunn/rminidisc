@@ -729,6 +729,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
+name = "minidisc-audio"
+version = "0.1.0"
+dependencies = [
+ "hound",
+ "rubato",
+ "symphonia",
+ "thiserror",
+]
+
+[[package]]
+name = "minidisc-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "atracdenc",
+ "clap",
+ "crossterm",
+ "env_logger",
+ "lofty",
+ "log",
+ "minidisc-audio",
+ "netmd",
+ "ratatui",
+ "rusb",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -991,33 +1018,6 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
-
-[[package]]
-name = "rmd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "atracdenc",
- "clap",
- "crossterm",
- "env_logger",
- "lofty",
- "log",
- "netmd",
- "ratatui",
- "rmd-audio",
- "rusb",
-]
-
-[[package]]
-name = "rmd-audio"
-version = "0.1.0"
-dependencies = [
- "hound",
- "rubato",
- "symphonia",
- "thiserror",
-]
 
 [[package]]
 name = "rubato"

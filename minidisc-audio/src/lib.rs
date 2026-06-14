@@ -96,7 +96,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("rmd_audio_test_{nanos}.wav"))
+        std::env::temp_dir().join(format!("minidisc_audio_test_{nanos}.wav"))
     }
 
     fn write_test_wav(
