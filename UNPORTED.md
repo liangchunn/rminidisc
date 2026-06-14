@@ -86,12 +86,33 @@ supported device is added later:
 
 ---
 
-## 4. Track Groups
+## 4. Track Groups (ported)
 
-`getTrackGroupList()` (`netmd-interface.ts:509`) parses the disc title's group
-structure (`//`-delimited cells like `1-3;GroupName`). Read-only and would be
-useful, but not in the CORE_TODO list. The raw title is already readable via
-`get_disc_title`. Porting requires the half/full-width range helpers.
+`getTrackGroupList()` (`netmd-interface.ts:509`) and the group-aware content
+helpers from `netmd-commands.ts` are now ported:
+
+- `get_track_group_list` — parses the `//`-delimited group cells into
+  `RawTrackGroup`s (with the synthetic "ungrouped" bucket), `netmd/src/groups.rs`.
+- `list_content` — structured `Disc { groups: [Group { tracks: [Track] }] }`
+  listing, `netmd/src/commands.rs`; plus `count_tracks_in_disc` / `tracks`.
+- TOC title-cell budgeting — `chars_to_cells`, `cells_for_title`,
+  `remaining_characters_for_titles`, `compile_disc_titles` (`groups.rs`).
+- Group editing — `Disc::add_group` / `rename_group` / `remove_group` (pure
+  mutations) and `rewrite_disc_groups` (writes via the verified `set_disc_title`).
+
+Exposed via `rmd groups` and `rmd group add|rename|remove`. The pure
+parsing/compiling/budgeting logic is unit-tested 1:1 against the JS reference,
+and the full group-edit round-trip (add / rename / remove, single- and
+multi-track ranges, full-width group names, overlap/range validation) has been
+verified on real hardware (MZ-N505).
+
+## ATRAC3plus / HiMD — out of scope
+
+ATRAC3plus and HiMD mass-storage mode are intentionally **not** implemented. The
+NetMD secure protocol cannot carry ATRAC3plus (only SP/PCM and ATRAC3
+LP2/LP105/LP4), so the ATRAC3plus encoder in `atracdenc` is unused here. Full
+HiMD support would require porting the separate `himd-js` filesystem library,
+which is not present in this repository.
 
 ---
 

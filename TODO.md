@@ -94,7 +94,7 @@ Items marked ~~strikethrough~~ are already implemented in Rust.
 - [x] `getTrackCount()` — raw query ported, wrapper not
 - [x] `_getDiscTitle(wchar)` — raw query ported, only first-chunk path tested
 - [ ] `getDiscTitle(wchar)` — wrapper with open/close (partially ported)
-- [ ] `getTrackGroupList()` — group structure parsing
+- [x] `getTrackGroupList()` — group structure parsing (groups.rs::get_track_group_list)
 - [ ] `getTrackTitle(track, wchar)`
 - [ ] `getDiscFlags()` — `1806 01101000 ff00 0001000b`
 - [ ] `getDiscCapacity()` — `1806 02101000 3080 0300 ff00 00000000`
@@ -196,22 +196,22 @@ All commands use the `1800 080046 f0030103` prefix.
 
 ### Data Structures (interfaces → structs)
 - [ ] `Device` — manufacturerName, productName, vendorId, productId, name
-- [ ] `Track` — index, title, fullWidthTitle, duration, channel, encoding, protected
-- [ ] `Group` — index, title, fullWidthTitle, tracks
-- [ ] `Disc` — title, fullWidthTitle, writable, writeProtected, used, left, total, trackCount, groups
+- [x] `Track` — index, title, fullWidthTitle, duration, channel, encoding, protected (types.rs)
+- [x] `Group` — index, title, fullWidthTitle, tracks (types.rs)
+- [x] `Disc` — title, fullWidthTitle, writable, writeProtected, used, left, total, trackCount, groups (types.rs)
 - [ ] `DeviceStatus` — discPresent, time, track, state
 
 ### Disc Content
-- [ ] `listContent(mdIface)` — full disc enumeration (title, groups, tracks, capacity)
+- [x] `listContent(mdIface)` — full disc enumeration (commands.rs::list_content)
 - [x] `getDeviceStatus(mdIface)` — comprehensive status snapshot (commands.rs)
-- [ ] `countTracksInDisc(disc)` / `getTracks(disc)` — helper accessors
+- [x] `countTracksInDisc(disc)` / `getTracks(disc)` — helper accessors (commands.rs/groups.rs)
 
 ### Title Management
-- [ ] `getCellsForTitle(trk)` — TOC cell allocation calculation
-- [ ] `getRemainingCharactersForTitles(disc, includeGroups?)`
-- [ ] `compileDiscTitles(disc)` — cell allocation for all titles
-- [ ] `rewriteDiscGroups(mdIface, disc)` — rewrite group structure
-- [ ] `renameDisc(mdIface, newName, newFullWidthName?)`
+- [x] `getCellsForTitle(trk)` — TOC cell allocation calculation (groups.rs::cells_for_title)
+- [x] `getRemainingCharactersForTitles(disc, includeGroups?)` (groups.rs)
+- [x] `compileDiscTitles(disc)` — cell allocation for all titles (groups.rs)
+- [x] `rewriteDiscGroups(mdIface, disc)` — rewrite group structure (groups.rs)
+- [x] `renameDisc(mdIface, newName, newFullWidthName?)` — disc.rs::rename_disc
 
 ### Upload/Download
 - [ ] `upload(mdIface, track, progressCallback?)` — read track from device (`[DiscFormat, Uint8Array]`)
@@ -287,11 +287,11 @@ All commands use the `1800 080046 f0030103` prefix.
 - [x] `command [cmd]` — play/stop/next/prev/eject (`rmd play|pause|stop|next|prev|ff|rewind|eject`)
 - [x] `goto [track]` — seek to track (`rmd goto <track>`, 1-based)
 - [ ] `ll [hex]` — raw hex query
-- [ ] `wipe` — erase disc
-- [ ] `ls` — list disc content
-- [ ] `set_raw_title [title]` — set disc title with groups
-- [ ] `upload [inputfile]` — upload music to device
+- [x] `wipe` — erase disc (`rmd erase disc`)
+- [x] `ls` — list disc content (`rmd groups`, group-aware)
+- [x] `set_raw_title [title]` — set disc title with groups (`rmd group add|rename|remove`)
+- [x] `upload [inputfile]` — upload music to device (`rmd upload`)
 - [ ] `download [track] [outputfile]` — download song
-- [ ] `rename [track] [title]` — rename track
-- [ ] `move [src] [dst]` — move track
+- [x] `rename [track] [title]` — rename track (`rmd rename`)
+- [x] `move [src] [dst]` — move track (`rmd move`)
 - [ ] `read_utoc [outputfile]` — read UTOC

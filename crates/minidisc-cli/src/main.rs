@@ -99,6 +99,42 @@ enum Command {
     List,
     /// Launch the interactive playback TUI
     Control,
+    /// List the disc's group structure and per-track details
+    Groups,
+    /// Edit the disc's group structure
+    Group {
+        #[command(subcommand)]
+        action: GroupAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum GroupAction {
+    /// Create a group over a 1-based track range (e.g. "1-3" or "5")
+    Add {
+        /// Track range, 1-based: "1-3" for a span or "5" for a single track
+        range: String,
+        /// Half-width group title
+        name: String,
+        /// Full-width group title
+        #[arg(long)]
+        full: Option<String>,
+    },
+    /// Rename a group by its index (as shown by `groups`)
+    Rename {
+        /// Group index from `groups`
+        index: usize,
+        /// New half-width group title
+        name: String,
+        /// New full-width group title
+        #[arg(long)]
+        full: Option<String>,
+    },
+    /// Dissolve a group by its index (as shown by `groups`)
+    Remove {
+        /// Group index from `groups`
+        index: usize,
+    },
 }
 
 #[derive(Args)]
@@ -152,6 +188,8 @@ fn main() -> anyhow::Result<()> {
         Command::Goto { track } => cmd_goto(track, cli.device),
         Command::Status => cmd_status(cli.device),
         Command::List => cmd_list(),
+        Command::Groups => cmd_groups(cli.device),
+        Command::Group { action } => cmd_group(action, cli.device),
         Command::Control => unreachable!("Control handled before env_logger init"),
     }
 }
@@ -248,23 +286,34 @@ fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     let track_count = netmd::get_track_count(&handle)?;
     info!("track count: {track_count}");
 
-    for track in 0..track_count as u16 {
-        let title = netmd::get_track_title(&handle, track, false).unwrap_or_default();
-        let length = netmd::get_track_length(&handle, track)?;
-        let (encoding, channels) = netmd::get_track_encoding(&handle, track)?;
-        let flags = netmd::get_track_flags(&handle, track)?;
-        info!(
-            "track {}: {:?} len={:02}:{:02}:{:02}+{:03} enc={:?} ch={:?} flags=0x{:02x}",
-            track + 1,
-            title,
-            length[0],
-            length[1],
-            length[2],
-            length[3],
-            encoding,
-            channels,
-            flags
-        );
+    let group_list = netmd::get_track_group_list(&handle)?;
+    let has_named_groups = group_list.iter().any(|g| g.name.is_some());
+
+    for group in &group_list {
+        if has_named_groups {
+            match &group.name {
+                Some(name) => info!("group: {name:?}"),
+                None => info!("(ungrouped)"),
+            }
+        }
+        for &track in &group.tracks {
+            let title = netmd::get_track_title(&handle, track, false).unwrap_or_default();
+            let length = netmd::get_track_length(&handle, track)?;
+            let (encoding, channels) = netmd::get_track_encoding(&handle, track)?;
+            let flags = netmd::get_track_flags(&handle, track)?;
+            info!(
+                "  track {}: {:?} len={:02}:{:02}:{:02}+{:03} enc={:?} ch={:?} flags=0x{:02x}",
+                track + 1,
+                title,
+                length[0],
+                length[1],
+                length[2],
+                length[3],
+                encoding,
+                channels,
+                flags
+            );
+        }
     }
 
     netmd::close_device(&handle)?;
@@ -365,6 +414,121 @@ fn cmd_status(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         Some(t) => info!("time: {:02}:{:02}+{:03}", t.minute, t.second, t.frame),
         None => info!("time: -"),
     }
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+fn cmd_groups(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let handle = netmd::open_device_matching(device)?;
+    let disc = netmd::list_content(&handle)?;
+
+    info!("disc title: {:?}", disc.title);
+    if !disc.full_width_title.is_empty() {
+        info!("disc full-width title: {:?}", disc.full_width_title);
+    }
+    info!(
+        "writable={} write_protected={} tracks={}",
+        disc.writable, disc.write_protected, disc.track_count
+    );
+    info!(
+        "capacity: used={} total={} free={}",
+        netmd::format_time_from_frames(disc.used),
+        netmd::format_time_from_frames(disc.total),
+        netmd::format_time_from_frames(disc.left),
+    );
+
+    let remaining = netmd::remaining_characters_for_titles(&disc, true);
+    info!(
+        "title space left: half-width={} chars full-width={} chars",
+        remaining.half_width, remaining.full_width
+    );
+
+    for group in &disc.groups {
+        match &group.title {
+            Some(name) => {
+                let full = group
+                    .full_width_title
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(|s| format!(" / {s:?}"))
+                    .unwrap_or_default();
+                info!("[{}] group {:?}{}", group.index, name, full);
+            }
+            None => info!("[{}] (ungrouped)", group.index),
+        }
+        for track in &group.tracks {
+            info!(
+                "      track {}: {:?} {} enc={:?} ch={:?}{}",
+                track.index + 1,
+                track.title.as_deref().unwrap_or(""),
+                netmd::format_time_from_frames(track.duration_frames),
+                track.encoding,
+                track.channel,
+                if track.protected == netmd::TrackFlag::Protected {
+                    " [protected]"
+                } else {
+                    ""
+                },
+            );
+        }
+    }
+
+    netmd::close_device(&handle)?;
+    Ok(())
+}
+
+/// Parses a 1-based track range (`"1-3"` or `"5"`) into a 0-based inclusive
+/// `(first, last)` pair.
+fn parse_track_range(s: &str) -> anyhow::Result<(u16, u16)> {
+    let parse_one = |part: &str| -> anyhow::Result<u16> {
+        let n: u32 = part
+            .trim()
+            .parse()
+            .with_context(|| format!("invalid track number {part:?}"))?;
+        if n == 0 {
+            bail!("track numbers are 1-based (as shown by `info`)");
+        }
+        u16::try_from(n - 1).context("track number out of range")
+    };
+
+    match s.split_once('-') {
+        Some((lo, hi)) => {
+            let (first, last) = (parse_one(lo)?, parse_one(hi)?);
+            if first > last {
+                bail!("range start must not exceed end: {s:?}");
+            }
+            Ok((first, last))
+        }
+        None => {
+            let only = parse_one(s)?;
+            Ok((only, only))
+        }
+    }
+}
+
+fn cmd_group(action: GroupAction, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
+    let handle = netmd::open_device_matching(device)?;
+    let mut disc = netmd::list_content(&handle)?;
+
+    match action {
+        GroupAction::Add { range, name, full } => {
+            let (first, last) = parse_track_range(&range)?;
+            disc.add_group(first, last, name.clone(), full)?;
+            netmd::rewrite_disc_groups(&handle, &disc)?;
+            info!("created group {name:?} over tracks {range}");
+        }
+        GroupAction::Rename { index, name, full } => {
+            disc.rename_group(index, name.clone(), full)?;
+            netmd::rewrite_disc_groups(&handle, &disc)?;
+            info!("renamed group [{index}] to {name:?}");
+        }
+        GroupAction::Remove { index } => {
+            disc.remove_group(index)?;
+            netmd::rewrite_disc_groups(&handle, &disc)?;
+            info!("removed group [{index}]");
+        }
+    }
+
     netmd::close_device(&handle)?;
     Ok(())
 }

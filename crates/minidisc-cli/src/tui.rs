@@ -1,7 +1,8 @@
 //! Interactive playback TUI (`rmd control`).
 //!
-//! A full-screen ratatui interface that lists the disc's tracks, shows live
-//! playback status, and maps keys to the `netmd` transport commands.
+//! A full-screen ratatui interface that lists the disc's tracks (organized by
+//! group when the disc defines groups), shows live playback status, and maps
+//! keys to the `netmd` transport commands.
 //!
 //! USB reads on these devices are slow and blocking, so the design keeps work
 //! to a minimum: the track list is fetched once at startup (and on demand with
@@ -55,11 +56,51 @@ struct TrackRow {
     encoding: String,
 }
 
+/// A row in the disc list: either a group header or a track. Track rows carry
+/// the disc track index, which indexes into [`App::tracks`].
+#[derive(Debug, PartialEq, Eq)]
+enum Row {
+    Group(String),
+    Track(u16),
+}
+
+/// Builds the display rows from the disc's group structure, interleaving group
+/// headers with their tracks. Group headers are only emitted when the disc
+/// defines named groups; otherwise (or when the group list is empty) a flat
+/// list of all tracks is produced. Track indices `>= track_count` are skipped.
+fn build_rows(groups: &[netmd::RawTrackGroup], track_count: u16) -> Vec<Row> {
+    if groups.is_empty() {
+        return (0..track_count).map(Row::Track).collect();
+    }
+
+    let has_named = groups.iter().any(|g| g.name.is_some());
+    let mut rows = Vec::new();
+    for group in groups {
+        if has_named {
+            let label = match &group.name {
+                Some(name) if !name.is_empty() => name.clone(),
+                Some(_) => "<untitled group>".to_string(),
+                None => "(ungrouped)".to_string(),
+            };
+            rows.push(Row::Group(label));
+        }
+        for &track in &group.tracks {
+            if track < track_count {
+                rows.push(Row::Track(track));
+            }
+        }
+    }
+    rows
+}
+
 struct App {
     handle: DeviceHandle<GlobalContext>,
     device_name: String,
     disc_title: String,
+    /// Per-track details, indexed by disc track number.
     tracks: Vec<TrackRow>,
+    /// Display rows (group headers interleaved with tracks).
+    rows: Vec<Row>,
     list_state: ListState,
     status: Option<DeviceStatus>,
     message: String,
@@ -104,6 +145,7 @@ pub fn run(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         device_name,
         disc_title: String::new(),
         tracks: Vec::new(),
+        rows: Vec::new(),
         list_state: ListState::default(),
         status: None,
         message: "Loading disc…".to_string(),
@@ -114,9 +156,7 @@ pub fn run(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         level_modal: None,
     };
     app.reload_disc();
-    if !app.tracks.is_empty() {
-        app.list_state.select(Some(0));
-    }
+    app.select_first_track();
 
     enable_raw_mode().context("entering raw mode")?;
     let mut stdout = io::stdout();
@@ -208,15 +248,38 @@ impl App {
             }
         }
         self.tracks = rows;
-        if self.tracks.is_empty() {
-            self.list_state.select(None);
-        } else {
-            let sel = self
-                .list_state
-                .selected()
-                .map(|s| s.min(self.tracks.len() - 1))
-                .unwrap_or(0);
-            self.list_state.select(Some(sel));
+        self.rebuild_rows();
+        self.clamp_selection();
+    }
+
+    /// Builds the display rows by reading the disc's group structure and
+    /// interleaving group headers with their tracks. Group headers are only
+    /// shown when the disc actually defines named groups.
+    fn rebuild_rows(&mut self) {
+        let track_count = self.tracks.len() as u16;
+        let groups = netmd::get_track_group_list(&self.handle).unwrap_or_default();
+        self.rows = build_rows(&groups, track_count);
+    }
+
+    /// Returns the row index of the first selectable track row, if any.
+    fn first_track_row(&self) -> Option<usize> {
+        first_track_row(&self.rows)
+    }
+
+    fn select_first_track(&mut self) {
+        self.list_state.select(self.first_track_row());
+    }
+
+    /// Ensures the current selection points at a valid track row after a
+    /// reload, falling back to the first track.
+    fn clamp_selection(&mut self) {
+        let valid = self
+            .list_state
+            .selected()
+            .filter(|&i| matches!(self.rows.get(i), Some(Row::Track(_))));
+        match valid {
+            Some(i) => self.list_state.select(Some(i)),
+            None => self.select_first_track(),
         }
     }
 
@@ -263,29 +326,40 @@ impl App {
     }
 
     fn select_prev(&mut self) {
-        if self.tracks.is_empty() {
+        let Some(current) = self.list_state.selected() else {
+            self.select_first_track();
             return;
+        };
+        if let Some(i) = prev_track_row(&self.rows, current) {
+            self.list_state.select(Some(i));
         }
-        let i = self.list_state.selected().unwrap_or(0);
-        self.list_state.select(Some(i.saturating_sub(1)));
     }
 
     fn select_next(&mut self) {
-        if self.tracks.is_empty() {
+        let Some(current) = self.list_state.selected() else {
+            self.select_first_track();
             return;
+        };
+        if let Some(i) = next_track_row(&self.rows, current) {
+            self.list_state.select(Some(i));
         }
-        let i = self.list_state.selected().unwrap_or(0);
-        let max = self.tracks.len() - 1;
-        self.list_state.select(Some((i + 1).min(max)));
     }
 
     fn goto_selected(&mut self) {
-        if let Some(i) = self.list_state.selected() {
-            let track = i as u16;
-            match netmd::goto_track(&self.handle, track) {
-                Ok(t) => self.message = format!("seeked to track #{}", t + 1),
-                Err(e) => self.message = format!("goto failed: {e}"),
-            }
+        let Some(track) = self
+            .list_state
+            .selected()
+            .and_then(|i| self.rows.get(i))
+            .and_then(|r| match r {
+                Row::Track(idx) => Some(*idx),
+                Row::Group(_) => None,
+            })
+        else {
+            return;
+        };
+        match netmd::goto_track(&self.handle, track) {
+            Ok(t) => self.message = format!("seeked to track #{}", t + 1),
+            Err(e) => self.message = format!("goto failed: {e}"),
         }
     }
 
@@ -536,35 +610,43 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 fn draw_tracks(f: &mut Frame, area: Rect, app: &App) {
     let playing_track = app.status.and_then(|s| s.track);
     let items: Vec<ListItem> = app
-        .tracks
+        .rows
         .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let marker = if Some(i as u32) == playing_track {
-                "▶ "
-            } else {
-                "  "
-            };
-            let title = if t.title.is_empty() {
-                "<untitled>"
-            } else {
-                t.title.as_str()
-            };
-            let line = Line::from(vec![
-                Span::raw(marker),
-                Span::styled(
-                    format!("{:>2}. ", i + 1),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw(format!("{title:<32} ")),
-                Span::styled(
-                    format!("{:02}:{:02}:{:02}", t.length[0], t.length[1], t.length[2]),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::raw("  "),
-                Span::styled(t.encoding.clone(), Style::default().fg(Color::Green)),
-            ]);
-            ListItem::new(line)
+        .map(|row| match row {
+            Row::Group(label) => ListItem::new(Line::from(vec![Span::styled(
+                format!("▾ {label}"),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )])),
+            Row::Track(idx) => {
+                let i = *idx as usize;
+                let t = &app.tracks[i];
+                let marker = if Some(*idx as u32) == playing_track {
+                    "▶ "
+                } else {
+                    "  "
+                };
+                let title = if t.title.is_empty() {
+                    "<untitled>"
+                } else {
+                    t.title.as_str()
+                };
+                ListItem::new(Line::from(vec![
+                    Span::raw(marker),
+                    Span::styled(
+                        format!("{:>2}. ", i + 1),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw(format!("{title:<32} ")),
+                    Span::styled(
+                        format!("{:02}:{:02}:{:02}", t.length[0], t.length[1], t.length[2]),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(t.encoding.clone(), Style::default().fg(Color::Green)),
+                ]))
+            }
         })
         .collect();
 
@@ -649,4 +731,103 @@ fn draw_help(f: &mut Frame, area: Rect) {
     ]);
     let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL).title(" Keys "));
     f.render_widget(p, area);
+}
+
+/// Index of the first track row (skipping group headers), if any.
+fn first_track_row(rows: &[Row]) -> Option<usize> {
+    rows.iter().position(|r| matches!(r, Row::Track(_)))
+}
+
+/// Nearest track row after `current`, skipping group headers.
+fn next_track_row(rows: &[Row], current: usize) -> Option<usize> {
+    (current + 1..rows.len()).find(|&i| matches!(rows[i], Row::Track(_)))
+}
+
+/// Nearest track row before `current`, skipping group headers.
+fn prev_track_row(rows: &[Row], current: usize) -> Option<usize> {
+    (0..current).rev().find(|&i| matches!(rows[i], Row::Track(_)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use netmd::RawTrackGroup;
+
+    fn group(name: Option<&str>, tracks: &[u16]) -> RawTrackGroup {
+        RawTrackGroup {
+            name: name.map(str::to_string),
+            full_width_name: None,
+            tracks: tracks.to_vec(),
+        }
+    }
+
+    #[test]
+    fn build_rows_flat_when_no_named_groups() {
+        let groups = vec![group(None, &[0, 1, 2])];
+        assert_eq!(
+            build_rows(&groups, 3),
+            vec![Row::Track(0), Row::Track(1), Row::Track(2)]
+        );
+    }
+
+    #[test]
+    fn build_rows_empty_group_list_falls_back_to_flat() {
+        assert_eq!(build_rows(&[], 2), vec![Row::Track(0), Row::Track(1)]);
+    }
+
+    #[test]
+    fn build_rows_interleaves_headers_with_named_groups() {
+        let groups = vec![
+            group(None, &[3]),
+            group(Some("First"), &[0, 1, 2]),
+            group(Some("Second"), &[4]),
+        ];
+        assert_eq!(
+            build_rows(&groups, 5),
+            vec![
+                Row::Group("(ungrouped)".to_string()),
+                Row::Track(3),
+                Row::Group("First".to_string()),
+                Row::Track(0),
+                Row::Track(1),
+                Row::Track(2),
+                Row::Group("Second".to_string()),
+                Row::Track(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_rows_labels_empty_group_name() {
+        let groups = vec![group(Some(""), &[0])];
+        assert_eq!(
+            build_rows(&groups, 1),
+            vec![Row::Group("<untitled group>".to_string()), Row::Track(0)]
+        );
+    }
+
+    #[test]
+    fn build_rows_skips_out_of_range_tracks() {
+        let groups = vec![group(Some("G"), &[0, 5])];
+        assert_eq!(
+            build_rows(&groups, 1),
+            vec![Row::Group("G".to_string()), Row::Track(0)]
+        );
+    }
+
+    #[test]
+    fn navigation_skips_group_headers() {
+        let rows = vec![
+            Row::Group("a".into()),
+            Row::Track(1),
+            Row::Track(2),
+            Row::Group("b".into()),
+            Row::Track(4),
+        ];
+        assert_eq!(first_track_row(&rows), Some(1));
+        assert_eq!(next_track_row(&rows, 2), Some(4));
+        assert_eq!(next_track_row(&rows, 4), None);
+        assert_eq!(prev_track_row(&rows, 4), Some(2));
+        assert_eq!(prev_track_row(&rows, 1), None);
+    }
 }

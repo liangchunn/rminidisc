@@ -5,10 +5,16 @@ use log::debug;
 use rusb::{DeviceHandle, UsbContext};
 
 use crate::{
+    disc::{get_disc_capacity, get_disc_flags, get_disc_title},
     error::Result,
+    groups::get_track_group_list,
     playback::{get_playback_status2, get_position},
     status::get_status,
-    types::{DeviceStatus, PlaybackState, PlaybackTime},
+    track_info::{
+        get_track_count, get_track_encoding, get_track_flags, get_track_length, get_track_title,
+    },
+    types::{DeviceStatus, Disc, Group, PlaybackState, PlaybackTime, Track, TrackFlag},
+    util::time_to_frames,
 };
 
 /// Returns a comprehensive playback status snapshot. Mirrors
@@ -27,6 +33,88 @@ pub fn get_device_status<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Devi
         disc_present,
         position,
     ))
+}
+
+/// Enumerates the full disc contents into a structured [`Disc`]: title,
+/// capacity, and every track organized by group. Mirrors `listContent`
+/// (`netmd-commands.ts:178`).
+pub fn list_content<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Disc> {
+    debug!("list content");
+    let flags = get_disc_flags(handle)?;
+    let title = get_disc_title(handle, false)?;
+    let full_width_title = get_disc_title(handle, true)?;
+    let capacity = get_disc_capacity(handle)?;
+    let track_count = get_track_count(handle)?;
+
+    let mut frames_used = time_to_frames(&capacity[0]);
+    let mut frames_total = time_to_frames(&capacity[1]);
+    let mut frames_left = time_to_frames(&capacity[2]);
+    // Some devices (Sharps) report the time of the current recording mode;
+    // halve until the total fits an 80-minute SP disc. Mirrors the loop at
+    // `netmd-commands.ts:189`.
+    while frames_total > 512 * 60 * 82 {
+        frames_used /= 2;
+        frames_total /= 2;
+        frames_left /= 2;
+    }
+
+    let mut disc = Disc {
+        title,
+        full_width_title,
+        writable: flags.is_writable(),
+        write_protected: flags.is_write_protected(),
+        used: frames_used,
+        left: frames_left,
+        total: frames_total,
+        track_count,
+        groups: Vec::new(),
+    };
+
+    for (group_index, raw_group) in get_track_group_list(handle)?.into_iter().enumerate() {
+        let mut group = Group {
+            index: group_index,
+            title: raw_group.name,
+            full_width_title: raw_group.full_width_name,
+            tracks: Vec::new(),
+        };
+        for track_index in raw_group.tracks {
+            let (encoding, channel) = get_track_encoding(handle, track_index)?;
+            let duration_frames = time_to_frames(&get_track_length(handle, track_index)?);
+            let protected = TrackFlag::from_byte(get_track_flags(handle, track_index)?);
+            group.tracks.push(Track {
+                index: track_index,
+                title: non_empty(get_track_title(handle, track_index, false)?),
+                full_width_title: non_empty(get_track_title(handle, track_index, true)?),
+                duration_frames,
+                channel,
+                encoding,
+                protected,
+            });
+        }
+        disc.groups.push(group);
+    }
+
+    Ok(disc)
+}
+
+/// Total number of tracks across all groups. Mirrors `countTracksInDisc`.
+#[must_use]
+pub fn count_tracks_in_disc(disc: &Disc) -> usize {
+    crate::groups::count_tracks_in_disc(disc)
+}
+
+/// All tracks in disc order. Mirrors `getTracks` (`netmd-commands.ts:168`).
+#[must_use]
+pub fn tracks(disc: &Disc) -> Vec<&Track> {
+    crate::groups::tracks(disc)
+}
+
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Extracts the 16-bit operating status from playback-status block 2.

@@ -11,6 +11,7 @@ pub mod device;
 pub mod disc;
 pub mod ekb;
 pub mod error;
+pub mod groups;
 pub mod playback;
 pub mod query;
 pub mod scan;
@@ -24,7 +25,7 @@ pub mod types;
 pub mod util;
 pub mod wav;
 
-pub use commands::get_device_status;
+pub use commands::{count_tracks_in_disc, get_device_status, list_content, tracks};
 pub use descriptor::change_descriptor_state;
 pub use device::{
     close_device, device_ids, list_connected_devices, open_device, open_device_matching,
@@ -36,6 +37,11 @@ pub use disc::{
     rename_disc, set_disc_title,
 };
 pub use error::{NetMDError as Error, Result};
+pub use groups::{
+    cells_for_title, chars_to_cells, compile_disc_titles, get_track_group_list,
+    remaining_characters_for_titles, rewrite_disc_groups, CompiledTitles, RawTrackGroup,
+    RemainingChars, TitleCells,
+};
 pub use playback::{
     can_eject_disc, eject_disc, fast_forward, get_playback_status1, get_playback_status2,
     get_position, get_recording_parameters, goto_time, goto_track, next_track, pause, play,
@@ -56,8 +62,8 @@ pub use transport::{
     BULK_WRITE_ENDPOINT,
 };
 pub use types::{
-    ChannelCount, Channels, DeviceStatus, DiscFlag, DiscFlags, DiscFormat, Encoding,
-    FullOperatingStatus, NetMDLevel, OperatingStatus, PlaybackState, PlaybackTime,
-    ProtocolReply as Status, TrackFlag, Wireformat, FRAME_SIZE,
+    ChannelCount, Channels, DeviceStatus, Disc, DiscFlag, DiscFlags, DiscFormat, Encoding,
+    FullOperatingStatus, Group, NetMDLevel, OperatingStatus, PlaybackState, PlaybackTime,
+    ProtocolReply as Status, Track, TrackFlag, Wireformat, FRAME_SIZE,
 };
 pub use util::{format_time_from_frames, time_to_frames};

@@ -94,6 +94,21 @@ pub enum TrackFlag {
     Unprotected = 0x00,
 }
 
+impl TrackFlag {
+    /// Interprets the raw track-flag byte from `getTrackFlags`. Mirrors the
+    /// `flags as TrackFlag` cast in `listContent` (`netmd-commands.ts:222`):
+    /// the protected bit pattern (`0x03`) means protected, anything else is
+    /// treated as unprotected.
+    #[must_use]
+    pub const fn from_byte(value: u8) -> Self {
+        if value == TrackFlag::Protected as u8 {
+            TrackFlag::Protected
+        } else {
+            TrackFlag::Unprotected
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscFlag {
@@ -248,6 +263,46 @@ impl ReadRequestHeader {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+}
+
+/// A single track entry in a [`Disc`] listing. Mirrors the `Track` interface
+/// (`netmd-commands.ts:81`). `index` is 0-based; titles are `None` when empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Track {
+    pub index: u16,
+    pub title: Option<String>,
+    pub full_width_title: Option<String>,
+    /// Duration in NetMD frames (see [`crate::util::time_to_frames`]).
+    pub duration_frames: u32,
+    pub channel: ChannelCount,
+    pub encoding: Encoding,
+    pub protected: TrackFlag,
+}
+
+/// A group of contiguous tracks. Mirrors the `Group` interface
+/// (`netmd-commands.ts:91`). A `title` of `None` is the synthetic "ungrouped"
+/// bucket holding tracks not assigned to any group.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Group {
+    pub index: usize,
+    pub title: Option<String>,
+    pub full_width_title: Option<String>,
+    pub tracks: Vec<Track>,
+}
+
+/// A full disc content listing. Mirrors the `Disc` interface
+/// (`netmd-commands.ts:98`). Capacity fields are in NetMD frames.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Disc {
+    pub title: String,
+    pub full_width_title: String,
+    pub writable: bool,
+    pub write_protected: bool,
+    pub used: u32,
+    pub left: u32,
+    pub total: u32,
+    pub track_count: u8,
+    pub groups: Vec<Group>,
 }
 
 #[derive(Debug)]
