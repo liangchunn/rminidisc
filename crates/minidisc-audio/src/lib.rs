@@ -6,10 +6,10 @@
 //! - `-ac 2 -ar 44100 -f s16be`
 //! - `-ac 2 -ar 44100 -f wav`
 
-pub mod decoder;
+pub(crate) mod decoder;
 pub mod error;
-pub mod output;
-pub mod resample;
+pub(crate) mod output;
+pub(crate) mod resample;
 
 use std::path::Path;
 
