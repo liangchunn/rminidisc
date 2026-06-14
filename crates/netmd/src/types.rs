@@ -148,14 +148,6 @@ impl DiscFlags {
     }
 }
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NetMDLevel {
-    Level1 = 0x20,
-    Level2 = 0x50,
-    Level3 = 0x70,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FullOperatingStatus {
     pub mode: u8,

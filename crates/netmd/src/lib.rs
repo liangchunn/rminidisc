@@ -33,7 +33,7 @@ pub use track::MdTrack;
 pub use transport::BULK_WRITE_ENDPOINT;
 pub use types::{
     ChannelCount, Channels, DeviceStatus, Disc, DiscFlag, DiscFlags, DiscFormat, Encoding,
-    FullOperatingStatus, Group, NetMDLevel, OperatingStatus, PlaybackState, PlaybackTime,
+    FullOperatingStatus, Group, OperatingStatus, PlaybackState, PlaybackTime,
     ProtocolReply as Status, Track, TrackFlag, Wireformat, FRAME_SIZE,
 };
 pub use util::{format_time_from_frames, time_to_frames};
