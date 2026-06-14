@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Rust workspace (resolver 3) for talking to Sony/Sharp NetMD MiniDisc devices over USB.
-Three crates under `crates/`: `netmd` (protocol lib), `minidisc-audio` (decode/resample/encode), `minidisc-cli` (binary).
+Three crates under `crates/`: `netmd` (protocol lib), `md-pcm` (decode/resample/normalize), `minidisc-cli` (binary).
 
 ## Build / test gotchas
 
@@ -28,6 +28,6 @@ This repo is a line-by-line port of `netmd-js`. `PORTING_REFERENCE.md` is the au
 
 - `netmd/src/lib.rs` is a thin facade re-exporting from protocol-area modules (`disc`, `track_info`, `playback`, `secure`, `groups`, `transport`, etc.). Add new APIs in the relevant module and re-export there.
 - USB I/O lives in `transport.rs` (`send_query`, `read_reply*`); reply parsing uses the `scan`/`query` template language documented in PORTING_REFERENCE.md, with helpers in `util.rs`.
-- Audio upload path (`minidisc-audio`): non-ATRAC3 input is decoded with `symphonia`, resampled to 44.1 kHz stereo with `rubato`; SP -> s16be PCM, LP2/LP4 -> WAV then encoded via the external `atracdenc` crate. ATRAC3 `.wav` files upload directly without transcoding.
+- Audio upload path (`md-pcm`): non-ATRAC3 input is decoded with `symphonia`, resampled to 44.1 kHz stereo with `rubato`; SP -> s16be PCM, LP2/LP4 -> WAV then encoded via the external `atracdenc` crate. ATRAC3 `.wav` files upload directly without transcoding.
 </content>
 </invoke>

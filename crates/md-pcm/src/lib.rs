@@ -3,8 +3,8 @@
 //! This crate intentionally knows nothing about MiniDisc wire formats or ATRAC
 //! encoding. It only replaces the old FFmpeg normalization steps:
 //!
-//! - `-ac 2 -ar 44100 -f s16be`
-//! - `-ac 2 -ar 44100 -f wav`
+//! - `-ac 2 -ar 44100 -f s16be`  → [decode_to_s16be_44100_stereo]
+//! - `-ac 2 -ar 44100 -f wav`    → [decode_to_wav_44100_stereo]
 
 pub(crate) mod decoder;
 pub mod error;
@@ -96,7 +96,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("minidisc_audio_test_{nanos}.wav"))
+        std::env::temp_dir().join(format!("md_pcm_test_{nanos}.wav"))
     }
 
     fn write_test_wav(

@@ -1,10 +1,10 @@
 [package]
-name = "minidisc-audio"
+name = "md-pcm"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "minidisc_audio"
+name = "md_pcm"
 path = "src/lib.rs"
 
 [dependencies]

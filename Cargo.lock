@@ -723,13 +723,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "memchr"
-version = "2.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
-
-[[package]]
-name = "minidisc-audio"
+name = "md-pcm"
 version = "0.1.0"
 dependencies = [
  "hound",
@@ -737,6 +731,12 @@ dependencies = [
  "symphonia",
  "thiserror",
 ]
+
+[[package]]
+name = "memchr"
+version = "2.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
 name = "minidisc-cli"
@@ -749,7 +749,7 @@ dependencies = [
  "env_logger",
  "lofty",
  "log",
- "minidisc-audio",
+ "md-pcm",
  "netmd",
  "ratatui",
  "rusb",
