@@ -1,24 +1,14 @@
-//! Track groups and TOC title-cell budgeting.
-//!
-//! Group membership on a MiniDisc is encoded entirely inside the raw disc-title
-//! string (e.g. `0;DiscName//1-3;GroupA//5;GroupB//`). This module ports the
-//! group parsing (`getTrackGroupList`, `netmd-interface.ts:509`), the structured
-//! disc listing helpers, the TOC cell-budget math, and the title compilation /
-//! rewrite logic from `netmd-commands.ts:242-371`.
-
 use log::debug;
-use rusb::{DeviceHandle, UsbContext};
+use rusb::UsbContext;
 
 use crate::{
-    disc::{get_disk_title, set_disc_title},
     error::{NetMDError, Result},
     title::{get_half_width_title_length, half_width_to_full_width_range},
-    track_info::get_track_count,
     types::{Disc, Encoding, Group, Track},
 };
 
-/// A group as parsed from the raw disc title. `name` is `None` for the
-/// synthetic "ungrouped" bucket. Track indices are 0-based.
+use super::NetMD;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawTrackGroup {
     pub name: Option<String>,
@@ -26,17 +16,30 @@ pub struct RawTrackGroup {
     pub tracks: Vec<u16>,
 }
 
-/// Parses the disc's group structure. Mirrors
-/// `NetMDInterface.getTrackGroupList` (`netmd-interface.ts:509`).
-///
-/// The first entry is the synthetic "ungrouped" bucket (`name: None`) holding
-/// any tracks not covered by a group, present only when such tracks exist.
-pub fn get_track_group_list<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Vec<RawTrackGroup>> {
-    debug!("get track group list");
-    let raw_title = get_disk_title(handle, false)?;
-    let raw_full_title = get_disk_title(handle, true)?;
-    let track_count = get_track_count(handle)? as u16;
-    parse_track_group_list(&raw_title, &raw_full_title, track_count)
+impl<T: UsbContext> NetMD<T> {
+    /// Parses the disc's group structure. Mirrors
+    /// `NetMDInterface.getTrackGroupList` (`netmd-interface.ts:509`).
+    ///
+    /// The first entry is the synthetic "ungrouped" bucket (`name: None`) holding
+    /// any tracks not covered by a group, present only when such tracks exist.
+    pub fn get_track_group_list(&self) -> Result<Vec<RawTrackGroup>> {
+        debug!("get track group list");
+        let raw_title = self.get_disc_title(false)?;
+        let raw_full_title = self.get_disc_title(true)?;
+        let track_count = self.get_track_count()? as u16;
+        parse_track_group_list(&raw_title, &raw_full_title, track_count)
+    }
+
+    /// Writes the disc's group structure back to the device. Mirrors
+    /// `rewriteDiscGroups` (`netmd-commands.ts:365`). Both raw titles are written
+    /// through [`set_disc_title`], which sanitizes and length-prefixes them.
+    pub fn rewrite_disc_groups(&self, disc: &Disc) -> Result<()> {
+        debug!("rewrite disc groups");
+        let compiled = compile_disc_titles(disc);
+        self.set_disc_title(&compiled.raw_title, false)?;
+        self.set_disc_title(&compiled.raw_full_width_title, true)?;
+        Ok(())
+    }
 }
 
 /// Pure core of [`get_track_group_list`], split out for testing.
@@ -55,8 +58,6 @@ fn parse_track_group_list(
         if group.is_empty() {
             continue;
         }
-        // Skip the disc-title cell (`0;...`), entries without a `;`, and the
-        // degenerate case of a title that isn't actually grouped.
         if group.starts_with("0;") || !group.contains(';') || !has_groups {
             continue;
         }
@@ -65,7 +66,6 @@ fn parse_track_group_list(
         if track_range.is_empty() {
             continue;
         }
-        // Everything after the first ';' is the (possibly empty) group name.
         let group_name = &group[track_range.len() + 1..];
 
         let full_width_range = half_width_to_full_width_range(track_range);
@@ -132,48 +132,34 @@ fn parse_track_group_list(
     Ok(result)
 }
 
-// ---------------------------------------------------------------------------
-// Disc accessors (ports of countTracksInDisc / getTracks)
-// ---------------------------------------------------------------------------
-
-/// Total number of tracks across all groups. Mirrors `countTracksInDisc`.
 #[must_use]
 pub fn count_tracks_in_disc(disc: &Disc) -> usize {
     disc.groups.iter().map(|g| g.tracks.len()).sum()
 }
 
-/// All tracks in disc order. Mirrors `getTracks` (`netmd-commands.ts:168`).
 #[must_use]
 pub fn tracks(disc: &Disc) -> Vec<&Track> {
     disc.groups.iter().flat_map(|g| g.tracks.iter()).collect()
 }
 
-// ---------------------------------------------------------------------------
-// TOC title-cell budgeting (ports of netmd-commands.ts:242-363)
-// ---------------------------------------------------------------------------
-
-/// Cell counts for a title. See [`cells_for_title`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TitleCells {
     pub half_width: usize,
     pub full_width: usize,
 }
 
-/// Remaining free characters for titles. See [`remaining_characters_for_titles`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RemainingChars {
     pub half_width: usize,
     pub full_width: usize,
 }
 
-/// Compiled raw disc-title strings. See [`compile_disc_titles`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledTitles {
     pub raw_title: String,
     pub raw_full_width_title: String,
 }
 
-/// Number of 7-char TOC cells needed for `len` characters (`ceil(len / 7)`).
 #[must_use]
 pub fn chars_to_cells(len: usize) -> usize {
     len.div_ceil(7)
@@ -183,9 +169,6 @@ fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 
-/// TOC cells used by a single track's titles. Mirrors `getCellsForTitle`
-/// (`netmd-commands.ts:244`). Non-SP tracks reserve at least one cell for the
-/// implicit `LP:` name prefix.
 #[must_use]
 pub fn cells_for_title(track: &Track) -> TitleCells {
     let encoding_name_correction = if track.encoding == Encoding::Sp { 0 } else { 1 };
@@ -200,14 +183,9 @@ pub fn cells_for_title(track: &Track) -> TitleCells {
     }
 }
 
-/// Remaining free title characters on the disc (255-cell TOC limit). Mirrors
-/// `getRemainingCharactersForTitles` (`netmd-commands.ts:255`).
-///
-/// `include_groups` accounts for the space taken by group cells (default `true`
-/// in the reference).
 #[must_use]
 pub fn remaining_characters_for_titles(disc: &Disc, include_groups: bool) -> RemainingChars {
-    const CELL_LIMIT: usize = 255; // see https://www.minidisc.org/md_toc.html
+    const CELL_LIMIT: usize = 255;
 
     let mut fw_title = format!("{}0;//", disc.full_width_title);
     let mut hw_title = format!("{}0;//", disc.title);
@@ -219,9 +197,6 @@ pub fn remaining_characters_for_titles(disc: &Disc, include_groups: bool) -> Rem
                 (Some(&lo), Some(&hi)) => (lo, hi),
                 _ => continue,
             };
-            // Faithful port of the reference's worst-case estimate: for a
-            // single-track group `group.tracks.length - 1 !== 0` is `false`,
-            // which JS stringifies into the range as the literal "false".
             let range = if group.tracks.len() - 1 != 0 {
                 format!("{}-{}//", min + 1, max + 1)
             } else {
@@ -248,9 +223,6 @@ pub fn remaining_characters_for_titles(disc: &Disc, include_groups: bool) -> Rem
     }
 }
 
-/// Compiles the raw half-width and full-width disc-title strings encoding the
-/// group structure, fitting as many group cells as the TOC budget allows.
-/// Mirrors `compileDiscTitles` (`netmd-commands.ts:291`).
 #[must_use]
 pub fn compile_disc_titles(disc: &Disc) -> CompiledTitles {
     let probe = Disc {
@@ -315,13 +287,11 @@ pub fn compile_disc_titles(disc: &Disc) -> CompiledTitles {
     }
 
     if group_hits == 0 {
-        // No real groups: fall back to the plain titles.
         new_raw_title = disc.title.clone();
         new_raw_full_title = disc.full_width_title.clone();
     }
 
     let half_len_in_toc = chars_to_cells(get_half_width_title_length(&new_raw_title)) * 7;
-    // NB: the reference omits the `* 7` here (`netmd-commands.ts:351`); kept for parity.
     let full_len_in_toc = chars_to_cells(utf16_len(&new_raw_full_title) * 2);
     if available_half < half_len_in_toc {
         new_raw_title = String::new();
@@ -340,24 +310,7 @@ pub fn compile_disc_titles(disc: &Disc) -> CompiledTitles {
     }
 }
 
-/// Writes the disc's group structure back to the device. Mirrors
-/// `rewriteDiscGroups` (`netmd-commands.ts:365`). Both raw titles are written
-/// through [`set_disc_title`], which sanitizes and length-prefixes them.
-pub fn rewrite_disc_groups<T: UsbContext>(handle: &DeviceHandle<T>, disc: &Disc) -> Result<()> {
-    debug!("rewrite disc groups");
-    let compiled = compile_disc_titles(disc);
-    set_disc_title(handle, &compiled.raw_title, false)?;
-    set_disc_title(handle, &compiled.raw_full_width_title, true)?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// In-memory group editing (pure Disc mutations)
-// ---------------------------------------------------------------------------
-
 impl Disc {
-    /// Returns the named (non-`None`-title) groups as `(first, last, name,
-    /// full_name)` ranges, sorted by first track index.
     fn named_ranges(&self) -> Vec<(u16, u16, String, Option<String>)> {
         let mut ranges: Vec<(u16, u16, String, Option<String>)> = self
             .groups
@@ -373,7 +326,6 @@ impl Disc {
         ranges
     }
 
-    /// Flattens every track into index order.
     fn flat_tracks(&self) -> Vec<Track> {
         let mut all: Vec<Track> = self
             .groups
@@ -384,8 +336,6 @@ impl Disc {
         all
     }
 
-    /// Rebuilds `self.groups` from a set of named ranges plus a single leading
-    /// "ungrouped" bucket, matching the device's `getTrackGroupList` layout.
     fn rebuild(&mut self, mut named: Vec<(u16, u16, String, Option<String>)>) {
         named.sort_by_key(|r| r.0);
         let flat = self.flat_tracks();
@@ -526,7 +476,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                raw_group(None, &[3, 5]), // tracks 3 and 5 (4th and 6th) are ungrouped
+                raw_group(None, &[3, 5]),
                 raw_group(Some("GroupA"), &[0, 1, 2]),
                 raw_group(Some("GroupB"), &[4]),
             ]
@@ -598,10 +548,8 @@ mod tests {
 
     #[test]
     fn cells_for_title_reserves_a_cell_for_lp_tracks() {
-        // Empty title, SP -> 0 cells; empty title, LP -> 1 cell (LP: prefix).
         assert_eq!(cells_for_title(&track(0, "", Encoding::Sp)).half_width, 0);
         assert_eq!(cells_for_title(&track(0, "", Encoding::Lp2)).half_width, 1);
-        // 8 half-width chars -> 2 cells.
         assert_eq!(
             cells_for_title(&track(0, "12345678", Encoding::Sp)).half_width,
             2
@@ -663,7 +611,6 @@ mod tests {
             3,
         );
         disc.add_group(0, 1, "Grp".into(), None).unwrap();
-        // Ungrouped bucket (track 2) first, then the named group.
         assert_eq!(disc.groups.len(), 2);
         assert_eq!(disc.groups[0].title, None);
         assert_eq!(
@@ -684,7 +631,6 @@ mod tests {
             vec![0, 1]
         );
 
-        // Overlap is rejected.
         assert!(disc.add_group(1, 2, "X".into(), None).is_err());
 
         let grp_index = disc.groups[1].index;

@@ -5,6 +5,12 @@ use rusb::{Device, DeviceHandle, GlobalContext, UsbContext};
 
 use crate::error::{NetMDError, Result};
 
+pub struct NetMD<T: UsbContext> {
+    pub handle: DeviceHandle<T>,
+    pub vendor_id: u16,
+    pub product_id: u16,
+}
+
 /// Sony USB vendor ID.
 pub const SONY_VENDOR_ID: u16 = 0x054c;
 /// Sharp USB vendor ID. Sharp devices need a different disc-title descriptor flow.
@@ -346,17 +352,24 @@ pub fn supported_device(vendor_id: u16, product_id: u16) -> Option<&'static Devi
         .find(|device| device.vendor_id == vendor_id && device.product_id == product_id)
 }
 
+impl<T: UsbContext> NetMD<T> {
+    /// Releases the claimed interface. Mirrors the runner's previous teardown.
+    pub fn close(&self) -> Result<()> {
+        info!("closing device");
+        self.handle.release_interface(0)?;
+        Ok(())
+    }
+}
+
 /// Opens one connected supported NetMD device and claims its interface.
 ///
 /// If exactly one supported device is connected, it is selected automatically.
 /// If multiple supported devices are connected, callers must pass a selector.
-pub fn open_device() -> Result<DeviceHandle<GlobalContext>> {
+pub fn open_device() -> Result<NetMD<GlobalContext>> {
     open_device_matching(None)
 }
 
-pub fn open_device_matching(
-    selector: Option<DeviceSelector>,
-) -> Result<DeviceHandle<GlobalContext>> {
+pub fn open_device_matching(selector: Option<DeviceSelector>) -> Result<NetMD<GlobalContext>> {
     let devices = rusb::devices()?
         .iter()
         .filter_map(connected_supported_device)
@@ -429,13 +442,20 @@ pub fn open_device_matching(
         );
     }
 
+    let vendor_id = device_desc.vendor_id();
+    let product_id = device_desc.product_id();
+
     handle
         .claim_interface(0)
         .map_err(|source| NetMDError::UsbContext {
             context: format!("claiming USB interface 0 on {device_id}"),
             source,
         })?;
-    Ok(handle)
+    Ok(NetMD {
+        handle,
+        vendor_id,
+        product_id,
+    })
 }
 
 struct ConnectedDevice {
@@ -464,18 +484,4 @@ fn connected_supported_device(device: Device<GlobalContext>) -> Option<Connected
     let desc = device.device_descriptor().ok()?;
     supported_device(desc.vendor_id(), desc.product_id())
         .map(|definition| ConnectedDevice { device, definition })
-}
-
-/// Releases the claimed interface. Mirrors the runner's previous teardown.
-pub fn close_device<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<()> {
-    info!("closing device");
-    handle.release_interface(0)?;
-    Ok(())
-}
-
-/// Returns the `(vendor_id, product_id)` of the device behind a handle. Used for
-/// EKB selection during secure download.
-pub fn device_ids<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<(u16, u16)> {
-    let desc = handle.device().device_descriptor()?;
-    Ok((desc.vendor_id(), desc.product_id()))
 }

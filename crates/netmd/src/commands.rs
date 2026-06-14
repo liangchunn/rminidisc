@@ -1,109 +1,98 @@
-//! High-level convenience commands composed from the lower-level protocol
-//! functions. Ports selected helpers from `netmd-commands.ts`.
-
 use log::debug;
-use rusb::{DeviceHandle, UsbContext};
+use rusb::UsbContext;
 
 use crate::{
-    disc::{get_disc_capacity, get_disc_flags, get_disc_title},
     error::Result,
-    groups::get_track_group_list,
-    playback::{get_playback_status2, get_position},
-    status::get_status,
-    track_info::{
-        get_track_count, get_track_encoding, get_track_flags, get_track_length, get_track_title,
-    },
     types::{DeviceStatus, Disc, Group, PlaybackState, PlaybackTime, Track, TrackFlag},
     util::time_to_frames,
 };
 
-/// Returns a comprehensive playback status snapshot. Mirrors
-/// `getDeviceStatus` (`netmd-commands.ts:131`).
-pub fn get_device_status<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<DeviceStatus> {
-    debug!("get device status");
-    let status = get_status(handle)?;
-    let playback_status2 = get_playback_status2(handle)?;
-    let position = get_position(handle)?;
+use super::NetMD;
 
-    let operating_status = playback_status2_to_operating_status(&playback_status2);
-    let disc_present = status.get(4) != Some(&0x80);
+impl<T: UsbContext> NetMD<T> {
+    /// Returns a comprehensive playback status snapshot. Mirrors
+    /// `getDeviceStatus` (`netmd-commands.ts:131`).
+    pub fn get_device_status(&self) -> Result<DeviceStatus> {
+        debug!("get device status");
+        let status = self.get_status()?;
+        let playback_status2 = self.get_playback_status2()?;
+        let position = self.get_position()?;
 
-    Ok(derive_device_status(
-        operating_status,
-        disc_present,
-        position,
-    ))
-}
+        let operating_status = playback_status2_to_operating_status(&playback_status2);
+        let disc_present = status.get(4) != Some(&0x80);
 
-/// Enumerates the full disc contents into a structured [`Disc`]: title,
-/// capacity, and every track organized by group. Mirrors `listContent`
-/// (`netmd-commands.ts:178`).
-pub fn list_content<T: UsbContext>(handle: &DeviceHandle<T>) -> Result<Disc> {
-    debug!("list content");
-    let flags = get_disc_flags(handle)?;
-    let title = get_disc_title(handle, false)?;
-    let full_width_title = get_disc_title(handle, true)?;
-    let capacity = get_disc_capacity(handle)?;
-    let track_count = get_track_count(handle)?;
-
-    let mut frames_used = time_to_frames(&capacity[0]);
-    let mut frames_total = time_to_frames(&capacity[1]);
-    let mut frames_left = time_to_frames(&capacity[2]);
-    // Some devices (Sharps) report the time of the current recording mode;
-    // halve until the total fits an 80-minute SP disc. Mirrors the loop at
-    // `netmd-commands.ts:189`.
-    while frames_total > 512 * 60 * 82 {
-        frames_used /= 2;
-        frames_total /= 2;
-        frames_left /= 2;
+        Ok(derive_device_status(
+            operating_status,
+            disc_present,
+            position,
+        ))
     }
 
-    let mut disc = Disc {
-        title,
-        full_width_title,
-        writable: flags.is_writable(),
-        write_protected: flags.is_write_protected(),
-        used: frames_used,
-        left: frames_left,
-        total: frames_total,
-        track_count,
-        groups: Vec::new(),
-    };
+    /// Enumerates the full disc contents into a structured [`Disc`]: title,
+    /// capacity, and every track organized by group. Mirrors `listContent`
+    /// (`netmd-commands.ts:178`).
+    pub fn list_content(&self) -> Result<Disc> {
+        debug!("list content");
+        let flags = self.get_disc_flags()?;
+        let title = self.get_disc_title(false)?;
+        let full_width_title = self.get_disc_title(true)?;
+        let capacity = self.get_disc_capacity()?;
+        let track_count = self.get_track_count()?;
 
-    for (group_index, raw_group) in get_track_group_list(handle)?.into_iter().enumerate() {
-        let mut group = Group {
-            index: group_index,
-            title: raw_group.name,
-            full_width_title: raw_group.full_width_name,
-            tracks: Vec::new(),
-        };
-        for track_index in raw_group.tracks {
-            let (encoding, channel) = get_track_encoding(handle, track_index)?;
-            let duration_frames = time_to_frames(&get_track_length(handle, track_index)?);
-            let protected = TrackFlag::from_byte(get_track_flags(handle, track_index)?);
-            group.tracks.push(Track {
-                index: track_index,
-                title: non_empty(get_track_title(handle, track_index, false)?),
-                full_width_title: non_empty(get_track_title(handle, track_index, true)?),
-                duration_frames,
-                channel,
-                encoding,
-                protected,
-            });
+        let mut frames_used = time_to_frames(&capacity[0]);
+        let mut frames_total = time_to_frames(&capacity[1]);
+        let mut frames_left = time_to_frames(&capacity[2]);
+        while frames_total > 512 * 60 * 82 {
+            frames_used /= 2;
+            frames_total /= 2;
+            frames_left /= 2;
         }
-        disc.groups.push(group);
-    }
 
-    Ok(disc)
+        let mut disc = Disc {
+            title,
+            full_width_title,
+            writable: flags.is_writable(),
+            write_protected: flags.is_write_protected(),
+            used: frames_used,
+            left: frames_left,
+            total: frames_total,
+            track_count,
+            groups: Vec::new(),
+        };
+
+        for (group_index, raw_group) in self.get_track_group_list()?.into_iter().enumerate() {
+            let mut group = Group {
+                index: group_index,
+                title: raw_group.name,
+                full_width_title: raw_group.full_width_name,
+                tracks: Vec::new(),
+            };
+            for track_index in raw_group.tracks {
+                let (encoding, channel) = self.get_track_encoding(track_index)?;
+                let duration_frames = time_to_frames(&self.get_track_length(track_index)?);
+                let protected = TrackFlag::from_byte(self.get_track_flags(track_index)?);
+                group.tracks.push(Track {
+                    index: track_index,
+                    title: non_empty(self.get_track_title(track_index, false)?),
+                    full_width_title: non_empty(self.get_track_title(track_index, true)?),
+                    duration_frames,
+                    channel,
+                    encoding,
+                    protected,
+                });
+            }
+            disc.groups.push(group);
+        }
+
+        Ok(disc)
+    }
 }
 
-/// Total number of tracks across all groups. Mirrors `countTracksInDisc`.
 #[must_use]
 pub fn count_tracks_in_disc(disc: &Disc) -> usize {
     crate::groups::count_tracks_in_disc(disc)
 }
 
-/// All tracks in disc order. Mirrors `getTracks` (`netmd-commands.ts:168`).
 #[must_use]
 pub fn tracks(disc: &Disc) -> Vec<&Track> {
     crate::groups::tracks(disc)
@@ -117,9 +106,6 @@ fn non_empty(s: String) -> Option<String> {
     }
 }
 
-/// Extracts the 16-bit operating status from playback-status block 2.
-/// Mirrors `(playbackStatus2[4] << 8) | playbackStatus2[5]`
-/// (`netmd-commands.ts:134`).
 fn playback_status2_to_operating_status(playback_status2: &[u8]) -> Option<u16> {
     match (playback_status2.get(4), playback_status2.get(5)) {
         (Some(&b1), Some(&b2)) => Some(((b1 as u16) << 8) | b2 as u16),
@@ -127,8 +113,6 @@ fn playback_status2_to_operating_status(playback_status2: &[u8]) -> Option<u16> 
     }
 }
 
-/// Pure derivation of [`DeviceStatus`] from the raw inputs, separated for
-/// testing. Mirrors the corrections in `netmd-commands.ts:140-159`.
 fn derive_device_status(
     operating_status: Option<u16>,
     disc_present: bool,
@@ -138,20 +122,17 @@ fn derive_device_status(
         .map(PlaybackState::from_u16)
         .unwrap_or(PlaybackState::Unknown(0));
 
-    // "playing" without a disc actually means "ready".
     if state == PlaybackState::Playing && !disc_present {
         state = PlaybackState::Ready;
     }
 
     let track = position.map(|p| p[0]);
     let time = position.map(|p| PlaybackTime {
-        // position = [track, hour, minute, second, frame]
         minute: p[2] + p[1] * 60,
         second: p[3],
         frame: p[4],
     });
 
-    // While reading the TOC or with no disc, treat as "not present".
     let disc_present_effective =
         disc_present && !matches!(state, PlaybackState::ReadingToc | PlaybackState::NoDisc);
 
@@ -207,13 +188,12 @@ mod tests {
 
     #[test]
     fn position_maps_to_time_and_track() {
-        // position = [track, hour, minute, second, frame]
         let s = derive_device_status(Some(50037), true, Some([3, 1, 5, 30, 100]));
         assert_eq!(s.state, PlaybackState::Playing);
         assert!(s.disc_present);
         assert_eq!(s.track, Some(3));
         let t = s.time.unwrap();
-        assert_eq!(t.minute, 5 + 60); // hour*60 + minute
+        assert_eq!(t.minute, 5 + 60);
         assert_eq!(t.second, 30);
         assert_eq!(t.frame, 100);
     }

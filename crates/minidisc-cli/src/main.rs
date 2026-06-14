@@ -15,6 +15,7 @@ use lofty::read_from_path;
 use log::info;
 use netmd::track::MdTrack;
 use netmd::wav;
+use netmd::NetMD;
 use netmd::Wireformat;
 use rusb::UsbContext;
 
@@ -242,23 +243,23 @@ fn cmd_list() -> anyhow::Result<()> {
 }
 
 fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let handle = netmd::open_device_matching(device)?;
+    let netmd = netmd::open_device_matching(device)?;
 
-    let title = netmd::get_disc_title(&handle, false)?;
+    let title = netmd.get_disc_title(false)?;
     info!("disc title: {title:?}");
 
-    let full_title = netmd::get_disc_title(&handle, true)?;
+    let full_title = netmd.get_disc_title(true)?;
     info!("disc full-width title: {full_title:?}");
 
-    match netmd::get_disc_subunit_identifier(&handle) {
+    match netmd.get_disc_subunit_identifier() {
         Ok(level) => info!("netmd level: 0x{level:02x}"),
         Err(e) => info!("subunit identifier unavailable: {e}"),
     }
 
-    let disc_present = netmd::is_disc_present(&handle)?;
+    let disc_present = netmd.is_disc_present()?;
     info!("disc present: {disc_present}");
 
-    let disc_flags = netmd::get_disc_flags(&handle)?;
+    let disc_flags = netmd.get_disc_flags()?;
     info!(
         "disc flags: raw=0x{:02x} writable={} write_protected={} unknown=0x{:02x}",
         disc_flags.raw(),
@@ -267,7 +268,7 @@ fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         disc_flags.unknown_bits()
     );
 
-    match netmd::get_disc_capacity(&handle) {
+    match netmd.get_disc_capacity() {
         Ok(cap) => info!(
             "disc capacity: recorded={:?} total={:?} available={:?}",
             cap[0], cap[1], cap[2]
@@ -275,7 +276,7 @@ fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         Err(e) => info!("disc capacity unavailable: {e}"),
     }
 
-    match netmd::get_full_operating_status(&handle) {
+    match netmd.get_full_operating_status() {
         Ok(status) => info!(
             "operating status: mode=0x{:02x} status={:?}",
             status.mode, status.status
@@ -283,10 +284,10 @@ fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         Err(e) => info!("operating status unavailable: {e}"),
     }
 
-    let track_count = netmd::get_track_count(&handle)?;
+    let track_count = netmd.get_track_count()?;
     info!("track count: {track_count}");
 
-    let group_list = netmd::get_track_group_list(&handle)?;
+    let group_list = netmd.get_track_group_list()?;
     let has_named_groups = group_list.iter().any(|g| g.name.is_some());
 
     for group in &group_list {
@@ -297,10 +298,10 @@ fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
             }
         }
         for &track in &group.tracks {
-            let title = netmd::get_track_title(&handle, track, false).unwrap_or_default();
-            let length = netmd::get_track_length(&handle, track)?;
-            let (encoding, channels) = netmd::get_track_encoding(&handle, track)?;
-            let flags = netmd::get_track_flags(&handle, track)?;
+            let title = netmd.get_track_title(track, false).unwrap_or_default();
+            let length = netmd.get_track_length(track)?;
+            let (encoding, channels) = netmd.get_track_encoding(track)?;
+            let flags = netmd.get_track_flags(track)?;
             info!(
                 "  track {}: {:?} len={:02}:{:02}:{:02}+{:03} enc={:?} ch={:?} flags=0x{:02x}",
                 track + 1,
@@ -316,24 +317,24 @@ fn cmd_info(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         }
     }
 
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
 fn cmd_erase(target: Option<String>, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let handle = netmd::open_device_matching(device)?;
+    let netmd = netmd::open_device_matching(device)?;
     match target.as_deref() {
         None | Some("disc") => {
-            netmd::erase_disc(&handle)?;
+            netmd.erase_disc()?;
             info!("disc erased");
         }
         Some(s) => {
             let track = parse_track_index(s)?;
-            netmd::erase_track(&handle, track)?;
+            netmd.erase_track(track)?;
             info!("erased track #{}", track + 1);
         }
     }
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
@@ -343,23 +344,23 @@ fn cmd_rename(
     full: bool,
     device: Option<netmd::DeviceSelector>,
 ) -> anyhow::Result<()> {
-    let handle = netmd::open_device_matching(device)?;
+    let netmd = netmd::open_device_matching(device)?;
     if target == "disc" {
-        netmd::rename_disc(&handle, &title, full)?;
+        netmd.rename_disc(&title, full)?;
         info!(
             "renamed disc to {title:?}{}",
             if full { " (full-width)" } else { "" }
         );
     } else {
         let track = parse_track_index(&target)?;
-        netmd::set_track_title(&handle, track, &title, full)?;
+        netmd.set_track_title(track, &title, full)?;
         info!(
             "renamed track #{} to {title:?}{}",
             track + 1,
             if full { " (full-width)" } else { "" }
         );
     }
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
@@ -367,43 +368,43 @@ fn cmd_move(from: u16, to: u16, device: Option<netmd::DeviceSelector>) -> anyhow
     let source = parse_track_index(&from.to_string())?;
     let dest = parse_track_index(&to.to_string())?;
 
-    let handle = netmd::open_device_matching(device)?;
-    netmd::move_track(&handle, source, dest)?;
+    let netmd = netmd::open_device_matching(device)?;
+    netmd.move_track(source, dest)?;
     info!("moved track #{} -> #{}", source + 1, dest + 1);
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
 fn cmd_transport(action: &str, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let handle = netmd::open_device_matching(device)?;
+    let netmd = netmd::open_device_matching(device)?;
     match action {
-        "play" => netmd::play(&handle)?,
-        "pause" => netmd::pause(&handle)?,
-        "stop" => netmd::stop(&handle)?,
-        "next" => netmd::next_track(&handle)?,
-        "prev" => netmd::previous_track(&handle)?,
-        "ff" => netmd::fast_forward(&handle)?,
-        "rewind" => netmd::rewind(&handle)?,
-        "eject" => netmd::eject_disc(&handle)?,
+        "play" => netmd.play()?,
+        "pause" => netmd.pause()?,
+        "stop" => netmd.stop()?,
+        "next" => netmd.next_track()?,
+        "prev" => netmd.previous_track()?,
+        "ff" => netmd.fast_forward()?,
+        "rewind" => netmd.rewind()?,
+        "eject" => netmd.eject_disc()?,
         other => bail!("unknown transport action {other:?}"),
     }
     info!("{action}");
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
 fn cmd_goto(track: u16, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
     let track = parse_track_index(&track.to_string())?;
-    let handle = netmd::open_device_matching(device)?;
-    let resulting = netmd::goto_track(&handle, track)?;
+    let netmd = netmd::open_device_matching(device)?;
+    let resulting = netmd.goto_track(track)?;
     info!("seeked to track #{}", resulting + 1);
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
 fn cmd_status(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let handle = netmd::open_device_matching(device)?;
-    let status = netmd::get_device_status(&handle)?;
+    let netmd = netmd::open_device_matching(device)?;
+    let status = netmd.get_device_status()?;
     info!("disc present: {}", status.disc_present);
     info!("state: {:?}", status.state);
     match status.track {
@@ -414,13 +415,13 @@ fn cmd_status(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         Some(t) => info!("time: {:02}:{:02}+{:03}", t.minute, t.second, t.frame),
         None => info!("time: -"),
     }
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
 fn cmd_groups(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let handle = netmd::open_device_matching(device)?;
-    let disc = netmd::list_content(&handle)?;
+    let netmd = netmd::open_device_matching(device)?;
+    let disc = netmd.list_content()?;
 
     info!("disc title: {:?}", disc.title);
     if !disc.full_width_title.is_empty() {
@@ -473,7 +474,7 @@ fn cmd_groups(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         }
     }
 
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
@@ -507,29 +508,29 @@ fn parse_track_range(s: &str) -> anyhow::Result<(u16, u16)> {
 }
 
 fn cmd_group(action: GroupAction, device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
-    let handle = netmd::open_device_matching(device)?;
-    let mut disc = netmd::list_content(&handle)?;
+    let netmd = netmd::open_device_matching(device)?;
+    let mut disc = netmd.list_content()?;
 
     match action {
         GroupAction::Add { range, name, full } => {
             let (first, last) = parse_track_range(&range)?;
             disc.add_group(first, last, name.clone(), full)?;
-            netmd::rewrite_disc_groups(&handle, &disc)?;
+            netmd.rewrite_disc_groups(&disc)?;
             info!("created group {name:?} over tracks {range}");
         }
         GroupAction::Rename { index, name, full } => {
             disc.rename_group(index, name.clone(), full)?;
-            netmd::rewrite_disc_groups(&handle, &disc)?;
+            netmd.rewrite_disc_groups(&disc)?;
             info!("renamed group [{index}] to {name:?}");
         }
         GroupAction::Remove { index } => {
             disc.remove_group(index)?;
-            netmd::rewrite_disc_groups(&handle, &disc)?;
+            netmd.rewrite_disc_groups(&disc)?;
             info!("removed group [{index}]");
         }
     }
 
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     Ok(())
 }
 
@@ -566,9 +567,7 @@ fn resolve_title(file: &str) -> String {
 }
 
 fn upload_one<T: UsbContext>(
-    handle: &rusb::DeviceHandle<T>,
-    vendor: u16,
-    product: u16,
+    netmd: &NetMD<T>,
     file: &str,
     requested: &str,
     title: &str,
@@ -597,17 +596,14 @@ fn upload_one<T: UsbContext>(
         }
     };
 
-    let (track_num, uuid, ccid) =
-        netmd::track::download_track(handle, &track, vendor, product, Some(&mut progress))?;
+    let (track_num, uuid, ccid) = netmd.download_track(&track, Some(&mut progress))?;
 
     info!("uploaded track #{track_num} (uuid={uuid} ccid={ccid}) title={title:?}");
     Ok(())
 }
 
 fn upload_folder<T: UsbContext>(
-    handle: &rusb::DeviceHandle<T>,
-    vendor: u16,
-    product: u16,
+    netmd: &NetMD<T>,
     folder: &str,
     requested: &str,
 ) -> anyhow::Result<()> {
@@ -637,7 +633,7 @@ fn upload_folder<T: UsbContext>(
         let file = path.to_string_lossy();
         let title = resolve_title(&file);
         info!("uploading {file:?} as {title:?}");
-        match upload_one(handle, vendor, product, &file, requested, &title) {
+        match upload_one(netmd, &file, requested, &title) {
             Ok(()) => succeeded.push(file.into_owned()),
             Err(e) => {
                 let err = format!("{e:#}");
@@ -671,22 +667,21 @@ fn cmd_upload(args: UploadArgs, device: Option<netmd::DeviceSelector>) -> anyhow
 
     let requested = args.format.to_lowercase();
 
-    let handle = netmd::open_device_matching(device)?;
-    let (vendor, product) = netmd::device_ids(&handle)?;
+    let netmd = netmd::open_device_matching(device)?;
 
     let result = if let Some(file) = &args.file {
         let title = match &args.title {
             Some(t) => t.clone(),
             None => resolve_title(file),
         };
-        upload_one(&handle, vendor, product, file, &requested, &title)
+        upload_one(&netmd, file, &requested, &title)
     } else if let Some(folder) = &args.folder {
-        upload_folder(&handle, vendor, product, folder, &requested)
+        upload_folder(&netmd, folder, &requested)
     } else {
         unreachable!()
     };
 
-    netmd::close_device(&handle)?;
+    netmd.close()?;
     result
 }
 

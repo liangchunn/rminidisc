@@ -25,10 +25,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
-use rusb::{DeviceHandle, GlobalContext};
+use rusb::GlobalContext;
 
 use crate::logbuf::{self, LevelControl, LogBuffer};
-use netmd::{DeviceStatus, PlaybackState};
+use netmd::{DeviceStatus, NetMD, PlaybackState};
 
 /// Selectable log levels for the modal, in display order.
 const LEVEL_CHOICES: [LevelFilter; 6] = [
@@ -94,7 +94,7 @@ fn build_rows(groups: &[netmd::RawTrackGroup], track_count: u16) -> Vec<Row> {
 }
 
 struct App {
-    handle: DeviceHandle<GlobalContext>,
+    netmd: NetMD<GlobalContext>,
     device_name: String,
     disc_title: String,
     /// Per-track details, indexed by disc track number.
@@ -134,14 +134,13 @@ pub fn run(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         .unwrap_or(LevelFilter::Info);
     let (logs, level) = logbuf::install(initial_level);
 
-    let handle = netmd::open_device_matching(device)?;
-    let (vendor, product) = netmd::device_ids(&handle)?;
-    let device_name = netmd::supported_device(vendor, product)
+    let netmd = netmd::open_device_matching(device)?;
+    let device_name = netmd::supported_device(netmd.vendor_id, netmd.product_id)
         .map(|d| d.name.to_string())
-        .unwrap_or_else(|| format!("{vendor:04x}:{product:04x}"));
+        .unwrap_or_else(|| format!("{:04x}:{:04x}", netmd.vendor_id, netmd.product_id));
 
     let mut app = App {
-        handle,
+        netmd,
         device_name,
         disc_title: String::new(),
         tracks: Vec::new(),
@@ -169,7 +168,7 @@ pub fn run(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
 
     // _guard restores the terminal on drop.
     drop(terminal);
-    let _ = netmd::close_device(&app.handle);
+    let _ = app.netmd.close();
     result
 }
 
@@ -194,12 +193,12 @@ fn event_loop(terminal: &mut Terminal<Backend>, app: &mut App) -> anyhow::Result
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                     KeyCode::Char('c') if ctrl => return Ok(()),
                     KeyCode::Char(' ') => app.toggle_play_pause(),
-                    KeyCode::Char('s') => app.transport("stop", netmd::stop),
-                    KeyCode::Char('n') => app.transport("next", netmd::next_track),
-                    KeyCode::Char('p') => app.transport("prev", netmd::previous_track),
-                    KeyCode::Char('f') => app.transport("fast-forward", netmd::fast_forward),
-                    KeyCode::Char('b') => app.transport("rewind", netmd::rewind),
-                    KeyCode::Char('e') => app.transport("eject", netmd::eject_disc),
+                    KeyCode::Char('s') => app.transport("stop", |n| n.stop()),
+                    KeyCode::Char('n') => app.transport("next", |n| n.next_track()),
+                    KeyCode::Char('p') => app.transport("prev", |n| n.previous_track()),
+                    KeyCode::Char('f') => app.transport("fast-forward", |n| n.fast_forward()),
+                    KeyCode::Char('b') => app.transport("rewind", |n| n.rewind()),
+                    KeyCode::Char('e') => app.transport("eject", |n| n.eject_disc()),
                     KeyCode::Char('R') => app.reload_disc(),
                     KeyCode::Char('t') => app.show_logs = !app.show_logs,
                     KeyCode::Char('l') => app.open_level_modal(),
@@ -222,16 +221,15 @@ fn event_loop(terminal: &mut Terminal<Backend>, app: &mut App) -> anyhow::Result
 impl App {
     fn reload_disc(&mut self) {
         self.message = "Reading disc…".to_string();
-        self.disc_title = netmd::get_disc_title(&self.handle, false).unwrap_or_default();
+        self.disc_title = self.netmd.get_disc_title(false).unwrap_or_default();
 
         let mut rows = Vec::new();
-        match netmd::get_track_count(&self.handle) {
+        match self.netmd.get_track_count() {
             Ok(count) => {
                 for track in 0..count as u16 {
-                    let title =
-                        netmd::get_track_title(&self.handle, track, false).unwrap_or_default();
-                    let length = netmd::get_track_length(&self.handle, track).unwrap_or([0; 4]);
-                    let encoding = match netmd::get_track_encoding(&self.handle, track) {
+                    let title = self.netmd.get_track_title(track, false).unwrap_or_default();
+                    let length = self.netmd.get_track_length(track).unwrap_or([0; 4]);
+                    let encoding = match self.netmd.get_track_encoding(track) {
                         Ok((enc, ch)) => format!("{enc:?}/{ch:?}"),
                         Err(_) => "?".to_string(),
                     };
@@ -257,7 +255,7 @@ impl App {
     /// shown when the disc actually defines named groups.
     fn rebuild_rows(&mut self) {
         let track_count = self.tracks.len() as u16;
-        let groups = netmd::get_track_group_list(&self.handle).unwrap_or_default();
+        let groups = self.netmd.get_track_group_list().unwrap_or_default();
         self.rows = build_rows(&groups, track_count);
     }
 
@@ -299,18 +297,18 @@ impl App {
             return;
         }
         self.last_status_poll = Instant::now();
-        match netmd::get_device_status(&self.handle) {
+        match self.netmd.get_device_status() {
             Ok(s) => self.status = Some(s),
             Err(e) => self.message = format!("status error: {e}"),
         }
     }
 
-    fn transport<F, E>(&mut self, label: &str, f: F)
-    where
-        F: Fn(&DeviceHandle<GlobalContext>) -> std::result::Result<(), E>,
-        E: std::fmt::Display,
-    {
-        match f(&self.handle) {
+    fn transport(
+        &mut self,
+        label: &str,
+        f: impl FnOnce(&NetMD<GlobalContext>) -> std::result::Result<(), netmd::Error>,
+    ) {
+        match f(&self.netmd) {
             Ok(()) => self.message = label.to_string(),
             Err(e) => self.message = format!("{label} failed: {e}"),
         }
@@ -319,9 +317,9 @@ impl App {
     fn toggle_play_pause(&mut self) {
         let playing = matches!(self.status.map(|s| s.state), Some(PlaybackState::Playing));
         if playing {
-            self.transport("pause", netmd::pause);
+            self.transport("pause", |n| n.pause());
         } else {
-            self.transport("play", netmd::play);
+            self.transport("play", |n| n.play());
         }
     }
 
@@ -357,7 +355,7 @@ impl App {
         else {
             return;
         };
-        match netmd::goto_track(&self.handle, track) {
+        match self.netmd.goto_track(track) {
             Ok(t) => self.message = format!("seeked to track #{}", t + 1),
             Err(e) => self.message = format!("goto failed: {e}"),
         }
@@ -603,7 +601,11 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  Disc: "),
         Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
     ]);
-    let p = Paragraph::new(line).block(Block::default().borders(Borders::ALL).title(" minidisc-cli "));
+    let p = Paragraph::new(line).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" minidisc-cli "),
+    );
     f.render_widget(p, area);
 }
 

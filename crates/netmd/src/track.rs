@@ -1,35 +1,20 @@
-//! Track upload (download-to-device) orchestration.
-//!
-//! Ported from `MDTrack` / `MDSession` (`netmd-interface.ts:944-1153`) and
-//! `download` (`netmd-commands.ts:465`). This is the track-WRITE direction
-//! (host → device), which the MZ-N505 supports. Track-READ (device → host /
-//! `saveTrackToArray`) is NOT ported (RH1/M200-only). See UNPORTED.md §3.
-
 use log::{debug, info, trace};
-use rusb::{DeviceHandle, UsbContext};
+use rusb::UsbContext;
 
 use crate::crypto::{encrypt_packets, retailmac};
 use crate::ekb::get_ekb_for_device;
 use crate::error::Result;
-use crate::secure::{
-    commit_track, enter_secure_session, get_leaf_id, leave_secure_session, prepare_download,
-    release, send_key_data, send_track, session_key_exchange, session_key_forget, setup_download,
-};
-use crate::track_info::set_track_title;
 use crate::types::{DiscFormat, Wireformat, FRAME_SIZE};
 
-/// The hardcoded content ID used for uploads. Mirrors `MDTrack.getContentID`
-/// (`netmd-interface.ts:992`).
+use super::NetMD;
+
 const CONTENT_ID: [u8; 20] = [
     0x01, 0x0f, 0x50, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x48, 0xa2, 0x8d, 0x3e, 0x1a, 0x3b, 0x0c,
     0x44, 0xaf, 0x2f, 0xa0,
 ];
 
-/// The hardcoded key-encryption-key. Mirrors `MDTrack.getKEK`
-/// (`netmd-interface.ts:1000`).
 const KEK: [u8; 8] = [0x14, 0xe3, 0x83, 0x4e, 0xe2, 0xd3, 0xcc, 0xa5];
 
-/// Returns the on-device frame size in bytes for a wire format.
 pub fn frame_size(format: Wireformat) -> usize {
     FRAME_SIZE
         .iter()
@@ -38,8 +23,6 @@ pub fn frame_size(format: Wireformat) -> usize {
         .expect("unknown wire format")
 }
 
-/// Maps a wire format to its disc format. Mirrors `discforwire`
-/// (`netmd-interface.ts:936`).
 pub fn disc_for_wire(format: Wireformat) -> DiscFormat {
     match format {
         Wireformat::Pcm => DiscFormat::SpStereo,
@@ -49,21 +32,14 @@ pub fn disc_for_wire(format: Wireformat) -> DiscFormat {
     }
 }
 
-/// A track to upload to the device. Mirrors `MDTrack` (`netmd-interface.ts:944`).
 pub struct MdTrack {
-    /// Half-width title.
     pub title: String,
-    /// Optional full-width title.
     pub full_width_title: Option<String>,
-    /// The wire format of `data`.
     pub format: Wireformat,
-    /// The raw (already encoded) audio payload. For SP this is big-endian PCM;
-    /// for LP2/LP4 this is raw ATRAC3 (WAV header already stripped).
     pub data: Vec<u8>,
 }
 
 impl MdTrack {
-    /// Total payload size, padded up to a whole number of frames.
     pub fn total_size(&self) -> usize {
         let fs = frame_size(self.format);
         let len = self.data.len();
@@ -74,109 +50,98 @@ impl MdTrack {
         }
     }
 
-    /// Number of frames in the (padded) payload.
     pub fn frame_count(&self) -> u32 {
         (self.total_size() / frame_size(self.format)) as u32
     }
 }
 
-/// Uploads a track to the device.
-///
-/// Mirrors `download` (`netmd-commands.ts:465`) + `MDSession.downloadTrack`
-/// (`netmd-interface.ts:1118`). Returns `(track_number, uuid_hex, content_id_hex)`.
-pub fn download_track<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    track: &MdTrack,
-    vendor: u16,
-    product: u16,
-    progress: Option<&mut dyn FnMut(u64, u64)>,
-) -> Result<(u16, String, String)> {
-    info!(
-        "downloading track '{}' (format={:?}, {} frames, {} bytes)",
-        track.title,
-        track.format,
-        track.frame_count(),
-        track.total_size(),
-    );
-    prepare_download(handle)?;
+impl<T: UsbContext> NetMD<T> {
+    /// Uploads a track to the device.
+    ///
+    /// Mirrors `download` (`netmd-commands.ts:465`) + `MDSession.downloadTrack`
+    /// (`netmd-interface.ts:1118`). Returns `(track_number, uuid_hex, content_id_hex)`.
+    pub fn download_track(
+        &self,
+        track: &MdTrack,
+        progress: Option<&mut dyn FnMut(u64, u64)>,
+    ) -> Result<(u16, String, String)> {
+        info!(
+            "downloading track '{}' (format={:?}, {} frames, {} bytes)",
+            track.title,
+            track.format,
+            track.frame_count(),
+            track.total_size(),
+        );
+        self.prepare_download()?;
 
-    // --- MDSession.init ---
-    enter_secure_session(handle)?;
-    let leaf_id = get_leaf_id(handle)?;
-    let ekb = get_ekb_for_device(&leaf_id, vendor, product);
-    send_key_data(
-        handle,
-        ekb.ekb_id,
-        &ekb.key_chain,
-        ekb.depth,
-        &ekb.signature,
-    )?;
+        self.enter_secure_session()?;
+        let leaf_id = self.get_leaf_id()?;
+        let ekb = get_ekb_for_device(&leaf_id, self.vendor_id, self.product_id);
+        self.send_key_data(ekb.ekb_id, &ekb.key_chain, ekb.depth, &ekb.signature)?;
 
-    let mut host_nonce = [0u8; 8];
-    {
-        use rand::Rng;
-        rand::rng().fill_bytes(&mut host_nonce);
-    }
-    let dev_nonce = session_key_exchange(handle, &host_nonce)?;
-    let mut nonce = [0u8; 16];
-    nonce[..8].copy_from_slice(&host_nonce);
-    nonce[8..].copy_from_slice(&dev_nonce);
-    let session_key = retailmac(&ekb.root_key, &nonce, &[0u8; 8]);
-    debug!("session established");
-
-    // --- MDSession.downloadTrack ---
-    let result = download_track_inner(handle, track, &session_key, progress);
-
-    // --- MDSession.close (always run, even on error) ---
-    let _ = session_key_forget(handle);
-    let _ = leave_secure_session(handle);
-    let _ = release(handle);
-
-    match &result {
-        Ok((track_num, uuid, _)) => {
-            info!("track #{track_num} uploaded successfully (uuid={uuid})");
+        let mut host_nonce = [0u8; 8];
+        {
+            use rand::Rng;
+            rand::rng().fill_bytes(&mut host_nonce);
         }
-        Err(e) => {
-            info!("track upload failed: {e}");
+        let dev_nonce = self.session_key_exchange(&host_nonce)?;
+        let mut nonce = [0u8; 16];
+        nonce[..8].copy_from_slice(&host_nonce);
+        nonce[8..].copy_from_slice(&dev_nonce);
+        let session_key = retailmac(&ekb.root_key, &nonce, &[0u8; 8]);
+        debug!("session established");
+
+        let result = self.download_track_inner(track, &session_key, progress);
+
+        let _ = self.session_key_forget();
+        let _ = self.leave_secure_session();
+        let _ = self.release();
+
+        match &result {
+            Ok((track_num, uuid, _)) => {
+                info!("track #{track_num} uploaded successfully (uuid={uuid})");
+            }
+            Err(e) => {
+                info!("track upload failed: {e}");
+            }
         }
+        result
     }
-    result
-}
 
-fn download_track_inner<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    track: &MdTrack,
-    session_key: &[u8; 8],
-    progress: Option<&mut dyn FnMut(u64, u64)>,
-) -> Result<(u16, String, String)> {
-    trace!("setting up download");
-    setup_download(handle, &CONTENT_ID, &KEK, session_key)?;
+    fn download_track_inner(
+        &self,
+        track: &MdTrack,
+        session_key: &[u8; 8],
+        progress: Option<&mut dyn FnMut(u64, u64)>,
+    ) -> Result<(u16, String, String)> {
+        trace!("setting up download");
+        self.setup_download(&CONTENT_ID, &KEK, session_key)?;
 
-    trace!(
-        "encrypting packets (frame_size={})",
-        frame_size(track.format)
-    );
-    let packets = encrypt_packets(&KEK, frame_size(track.format), &track.data);
-    trace!("sending encrypted track");
-    let (track_num, uuid, ccid) = send_track(
-        handle,
-        track.format as u8,
-        disc_for_wire(track.format) as u8,
-        track.frame_count(),
-        track.total_size() as u32,
-        &packets,
-        session_key,
-        progress,
-    )?;
+        trace!(
+            "encrypting packets (frame_size={})",
+            frame_size(track.format)
+        );
+        let packets = encrypt_packets(&KEK, frame_size(track.format), &track.data);
+        trace!("sending encrypted track");
+        let (track_num, uuid, ccid) = self.send_track(
+            track.format as u8,
+            disc_for_wire(track.format) as u8,
+            track.frame_count(),
+            track.total_size() as u32,
+            &packets,
+            session_key,
+            progress,
+        )?;
 
-    trace!("setting track title");
-    set_track_title(handle, track_num, &track.title, false)?;
-    if let Some(fw) = &track.full_width_title {
-        set_track_title(handle, track_num, fw, true)?;
+        trace!("setting track title");
+        self.set_track_title(track_num, &track.title, false)?;
+        if let Some(fw) = &track.full_width_title {
+            self.set_track_title(track_num, fw, true)?;
+        }
+        trace!("committing track #{track_num}");
+        self.commit_track(track_num, session_key)?;
+        Ok((track_num, uuid, ccid))
     }
-    trace!("committing track #{track_num}");
-    commit_track(handle, track_num, session_key)?;
-    Ok((track_num, uuid, ccid))
 }
 
 #[cfg(test)]
@@ -188,7 +153,7 @@ mod tests {
         let t = MdTrack {
             title: "t".into(),
             full_width_title: None,
-            format: Wireformat::Lp4, // frame size 96
+            format: Wireformat::Lp4,
             data: vec![0u8; 100],
         };
         assert_eq!(t.total_size(), 192);
@@ -200,7 +165,7 @@ mod tests {
         let t = MdTrack {
             title: "t".into(),
             full_width_title: None,
-            format: Wireformat::Pcm, // frame size 2048
+            format: Wireformat::Pcm,
             data: vec![0u8; 4096],
         };
         assert_eq!(t.total_size(), 4096);

@@ -1,9 +1,10 @@
 use log::trace;
-use rusb::{DeviceHandle, UsbContext};
+use rusb::UsbContext;
 
 use crate::error::{NetMDError, Result};
 use crate::query::Query;
-use crate::transport::send_query;
+
+use super::NetMD;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Descriptor {
@@ -51,17 +52,17 @@ impl DescriptorAction {
 
 pub struct DescriptorCommand(pub Descriptor, pub DescriptorAction);
 
-/// Opens then closes a descriptor TD. Mirrors `changeDescriptorState`.
-pub fn change_descriptor_state<T: UsbContext>(
-    handle: &DeviceHandle<T>,
-    descriptor: Descriptor,
-    action: DescriptorAction,
-) -> Result<()> {
-    trace!("change descriptor state: {descriptor:?} {action:?}");
-    // The JS reference swallows descriptor errors; we propagate them so callers
-    // can decide. Most descriptor open/close pairs are expected to succeed.
-    send_query(handle, DescriptorCommand(descriptor, action))?;
-    Ok(())
+impl<T: UsbContext> NetMD<T> {
+    /// Opens then closes a descriptor TD. Mirrors `changeDescriptorState`.
+    pub fn change_descriptor_state(
+        &self,
+        descriptor: Descriptor,
+        action: DescriptorAction,
+    ) -> Result<()> {
+        trace!("change descriptor state: {descriptor:?} {action:?}");
+        self.send_query(DescriptorCommand(descriptor, action))?;
+        Ok(())
+    }
 }
 
 impl TryFrom<DescriptorCommand> for Query {
@@ -85,7 +86,6 @@ mod tests {
         let q: Query = DescriptorCommand(Descriptor::DiskTitleTd, DescriptorAction::OpenRead)
             .try_into()
             .unwrap();
-        // 00 (status) 1808 (cmd) 101801 (disc title TD) 01 (open read) 00
         assert_eq!(q.0, [0x00, 0x18, 0x08, 0x10, 0x18, 0x01, 0x01, 0x00]);
     }
 
@@ -94,13 +94,11 @@ mod tests {
         let q: Query = DescriptorCommand(Descriptor::AudioContentsTd, DescriptorAction::Close)
             .try_into()
             .unwrap();
-        // 00 1808 101001 00 00
         assert_eq!(q.0, [0x00, 0x18, 0x08, 0x10, 0x10, 0x01, 0x00, 0x00]);
     }
 
     #[test]
     fn operating_status_block_uses_8000() {
-        // Per PORTING_REFERENCE: operatingStatusBlock is `80 00`, not `00 00`.
         let q: Query =
             DescriptorCommand(Descriptor::OperatingStatusBlock, DescriptorAction::OpenRead)
                 .try_into()
