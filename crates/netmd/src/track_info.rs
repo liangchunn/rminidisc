@@ -1,5 +1,4 @@
 use log::{debug, info, trace};
-use rusb::UsbContext;
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
@@ -12,7 +11,7 @@ use crate::{
 
 use super::NetMD;
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Reads a track's title. Mirrors `NetMDInterface.getTrackTitle`.
     ///
     /// `track` is 0-based. `w_char` selects the full-width title (UTOC4) vs the

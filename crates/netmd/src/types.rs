@@ -298,7 +298,7 @@ pub struct Disc {
 }
 
 #[derive(Debug)]
-pub struct ReadRequestData(pub Vec<u8>);
+pub struct ReadRequestData(pub(crate) Vec<u8>);
 
 impl ReadRequestData {
     pub fn scan<'b, 'a: 'b>(&'a self, template: &'a str) -> crate::error::Result<Vec<&'b [u8]>> {

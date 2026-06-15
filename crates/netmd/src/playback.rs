@@ -1,5 +1,4 @@
 use log::{debug, trace};
-use rusb::UsbContext;
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
@@ -26,7 +25,7 @@ enum TrackChange {
     Restart = 0x0001,
 }
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     fn play_action(&self, action: Action) -> Result<()> {
         let query = format!("00 18c3 ff {:02x} 000000", action as u8);
         let reply = self.send_query(query)?;

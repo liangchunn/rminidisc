@@ -1,5 +1,4 @@
 use log::debug;
-use rusb::UsbContext;
 
 use crate::{
     error::Result,
@@ -9,7 +8,7 @@ use crate::{
 
 use super::NetMD;
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Returns a comprehensive playback status snapshot. Mirrors
     /// `getDeviceStatus` (`netmd-commands.ts:131`).
     pub fn get_device_status(&self) -> Result<DeviceStatus> {

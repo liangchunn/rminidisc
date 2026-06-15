@@ -1,5 +1,4 @@
 use log::trace;
-use rusb::UsbContext;
 
 use crate::error::{NetMDError, Result};
 use crate::query::Query;
@@ -52,7 +51,7 @@ impl DescriptorAction {
 
 pub struct DescriptorCommand(pub Descriptor, pub DescriptorAction);
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Opens then closes a descriptor TD. Mirrors `changeDescriptorState`.
     pub fn change_descriptor_state(
         &self,

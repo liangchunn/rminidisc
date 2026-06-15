@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use log::{debug, info};
-use rusb::{Device, DeviceHandle, GlobalContext, UsbContext};
+use rusb::{Device, DeviceHandle, GlobalContext};
 
 use crate::error::{NetMDError, Result};
 
-pub struct NetMD<T: UsbContext> {
-    pub handle: DeviceHandle<T>,
+pub struct NetMD {
+    pub(crate) handle: DeviceHandle<GlobalContext>,
     pub vendor_id: u16,
     pub product_id: u16,
 }
@@ -352,7 +352,7 @@ pub fn supported_device(vendor_id: u16, product_id: u16) -> Option<&'static Devi
         .find(|device| device.vendor_id == vendor_id && device.product_id == product_id)
 }
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Releases the claimed interface. Mirrors the runner's previous teardown.
     pub fn close(&self) -> Result<()> {
         info!("closing device");
@@ -365,11 +365,11 @@ impl<T: UsbContext> NetMD<T> {
 ///
 /// If exactly one supported device is connected, it is selected automatically.
 /// If multiple supported devices are connected, callers must pass a selector.
-pub fn open_device() -> Result<NetMD<GlobalContext>> {
+pub fn open_device() -> Result<NetMD> {
     open_device_matching(None)
 }
 
-pub fn open_device_matching(selector: Option<DeviceSelector>) -> Result<NetMD<GlobalContext>> {
+pub fn open_device_matching(selector: Option<DeviceSelector>) -> Result<NetMD> {
     let devices = rusb::devices()?
         .iter()
         .filter_map(connected_supported_device)

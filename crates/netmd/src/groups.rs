@@ -1,5 +1,4 @@
 use log::debug;
-use rusb::UsbContext;
 
 use crate::{
     error::{NetMDError, Result},
@@ -16,7 +15,7 @@ pub struct RawTrackGroup {
     pub tracks: Vec<u16>,
 }
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Parses the disc's group structure. Mirrors
     /// `NetMDInterface.getTrackGroupList` (`netmd-interface.ts:509`).
     ///

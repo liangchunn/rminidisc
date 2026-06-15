@@ -1,5 +1,4 @@
 use log::{debug, trace};
-use rusb::UsbContext;
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
@@ -10,7 +9,7 @@ use crate::{
 
 use super::NetMD;
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Reads the raw operating status block. Mirrors `NetMDInterface.getStatus`.
     pub fn get_status(&self) -> Result<Vec<u8>> {
         debug!("get status");

@@ -25,10 +25,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
-use rusb::GlobalContext;
+use netmd::{DeviceStatus, NetMD, PlaybackState};
 
 use crate::logbuf::{self, LevelControl, LogBuffer};
-use netmd::{DeviceStatus, NetMD, PlaybackState};
 
 /// Selectable log levels for the modal, in display order.
 const LEVEL_CHOICES: [LevelFilter; 6] = [
@@ -94,7 +93,7 @@ fn build_rows(groups: &[netmd::RawTrackGroup], track_count: u16) -> Vec<Row> {
 }
 
 struct App {
-    netmd: NetMD<GlobalContext>,
+    netmd: NetMD,
     device_name: String,
     disc_title: String,
     /// Per-track details, indexed by disc track number.
@@ -306,7 +305,7 @@ impl App {
     fn transport(
         &mut self,
         label: &str,
-        f: impl FnOnce(&NetMD<GlobalContext>) -> std::result::Result<(), netmd::Error>,
+        f: impl FnOnce(&NetMD) -> std::result::Result<(), netmd::Error>,
     ) {
         match f(&self.netmd) {
             Ok(()) => self.message = label.to_string(),

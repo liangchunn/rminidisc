@@ -1,6 +1,6 @@
 use crate::error::{NetMDError, Result};
 
-pub struct Query(pub Vec<u8>);
+pub struct Query(pub(crate) Vec<u8>);
 
 impl From<Query> for Vec<u8> {
     fn from(val: Query) -> Self {

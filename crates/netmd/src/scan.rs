@@ -1,6 +1,6 @@
 use crate::error::{NetMDError, Result};
 
-pub fn scan<'a>(template: &'a str, data: &'a [u8]) -> Result<Vec<&'a [u8]>> {
+pub(crate) fn scan<'a>(template: &'a str, data: &'a [u8]) -> Result<Vec<&'a [u8]>> {
     let mut index = 0;
     let mut buf = String::new();
     let mut result = vec![];

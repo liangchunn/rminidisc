@@ -752,7 +752,6 @@ dependencies = [
  "md-pcm",
  "netmd",
  "ratatui",
- "rusb",
 ]
 
 [[package]]

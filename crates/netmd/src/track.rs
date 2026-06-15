@@ -1,5 +1,4 @@
 use log::{debug, info, trace};
-use rusb::UsbContext;
 
 use crate::crypto::{encrypt_packets, retailmac};
 use crate::ekb::get_ekb_for_device;
@@ -55,7 +54,7 @@ impl MdTrack {
     }
 }
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Uploads a track to the device.
     ///
     /// Mirrors `download` (`netmd-commands.ts:465`) + `MDSession.downloadTrack`

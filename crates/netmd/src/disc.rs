@@ -1,5 +1,4 @@
 use log::{debug, trace};
-use rusb::UsbContext;
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
@@ -16,7 +15,7 @@ use crate::{
 
 use super::NetMD;
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Reads the raw disc title (chunked). Mirrors `NetMDInterface._getDiscTitle`.
     ///
     /// Opens the audioContents + discTitle descriptors, reads all chunks, then

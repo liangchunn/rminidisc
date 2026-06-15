@@ -2,7 +2,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use log::trace;
-use rusb::{request_type, UsbContext};
+use rusb::request_type;
 
 use crate::{
     error::{NetMDError, Result},
@@ -30,7 +30,7 @@ pub const BULK_WRITE_ENDPOINT: u8 = 0x02;
 /// matching the chunk size `readBulk` uses for reads (`netmd-interface.ts:714`).
 const BULK_WRITE_CHUNK: usize = 0x10000;
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     pub fn send_query<M>(&self, message: M) -> Result<ReadRequestData>
     where
         M: TryInto<Query>,

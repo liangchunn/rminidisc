@@ -17,7 +17,6 @@ use netmd::track::MdTrack;
 use netmd::wav;
 use netmd::NetMD;
 use netmd::Wireformat;
-use rusb::UsbContext;
 
 /// NetMD MiniDisc command-line tool.
 ///
@@ -566,8 +565,8 @@ fn resolve_title(file: &str) -> String {
     }
 }
 
-fn upload_one<T: UsbContext>(
-    netmd: &NetMD<T>,
+fn upload_one(
+    netmd: &NetMD,
     file: &str,
     requested: &str,
     title: &str,
@@ -602,8 +601,8 @@ fn upload_one<T: UsbContext>(
     Ok(())
 }
 
-fn upload_folder<T: UsbContext>(
-    netmd: &NetMD<T>,
+fn upload_folder(
+    netmd: &NetMD,
     folder: &str,
     requested: &str,
 ) -> anyhow::Result<()> {

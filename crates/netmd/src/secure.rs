@@ -3,7 +3,6 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use log::{debug, info, trace};
-use rusb::UsbContext;
 
 use crate::{
     crypto::{self, EncryptedPacket},
@@ -17,7 +16,7 @@ use super::NetMD;
 
 const SECURE_PREFIX: &str = "00 1800 080046 f0030103";
 
-impl<T: UsbContext> NetMD<T> {
+impl NetMD {
     /// Acquires the device lock (`ff 010c ...`). Mirrors `NetMDInterface.acquire`.
     pub fn acquire(&self) -> Result<()> {
         debug!("acquire");
