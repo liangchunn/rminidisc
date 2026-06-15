@@ -1,8 +1,15 @@
+//! Operating-status polling.
+//!
+//! Low-level status reads ([`NetMD::get_status`], [`NetMD::is_disc_present`],
+//! [`NetMD::get_operating_status`], [`NetMD::get_full_operating_status`]) used
+//! by higher-level snapshots such as [`NetMD::get_device_status`].
+
 use log::{debug, trace};
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
     error::Result,
+    query::QueryBuilder,
     types::{FullOperatingStatus, OperatingStatus},
     util::parse_u8,
 };
@@ -14,7 +21,9 @@ impl NetMD {
     pub fn get_status(&self) -> Result<Vec<u8>> {
         debug!("get status");
         self.change_descriptor_state(Descriptor::OperatingStatusBlock, DescriptorAction::OpenRead)?;
-        let reply = self.send_query("00 1809 8001 0230 8800 0030 8804 00 ff00 00000000")?;
+        let reply = self.send_query(
+            QueryBuilder::new().raw("00 1809 8001 0230 8800 0030 8804 00 ff00 00000000")?,
+        )?;
         let data = reply.scan("%? 1809 8001 0230 8800 0030 8804 00 1000 00090000 %x")?;
         let status = data[0].to_vec();
         self.change_descriptor_state(Descriptor::OperatingStatusBlock, DescriptorAction::Close)?;
@@ -34,8 +43,10 @@ impl NetMD {
     pub fn get_full_operating_status(&self) -> Result<FullOperatingStatus> {
         debug!("get full operating status");
         self.change_descriptor_state(Descriptor::OperatingStatusBlock, DescriptorAction::OpenRead)?;
-        let reply =
-            self.send_query("00 1809 8001 0330 8802 0030 8805 0030 8806 00 ff00 00000000")?;
+        let reply = self.send_query(
+            QueryBuilder::new()
+                .raw("00 1809 8001 0330 8802 0030 8805 0030 8806 00 ff00 00000000")?,
+        )?;
         let data = reply
             .scan("%? 1809 8001 0330 8802 0030 8805 0030 8806 00 1000 00%?0000 00%b 8806 %x")?;
         let status_mode = parse_u8(data[0])?;

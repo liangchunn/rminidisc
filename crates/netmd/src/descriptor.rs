@@ -1,3 +1,11 @@
+//! Opening and closing device descriptors (TDs).
+//!
+//! Many NetMD reads/writes require the relevant descriptor to be opened before
+//! the operation and closed after. [`Descriptor`] names the descriptors and
+//! [`NetMD::change_descriptor_state`] issues the open/close
+//! ([`DescriptorAction`]) commands. See the descriptor table in
+//! `PORTING_REFERENCE.md`.
+
 use log::trace;
 
 use crate::error::{NetMDError, Result};
@@ -6,7 +14,7 @@ use crate::query::Query;
 use super::NetMD;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Descriptor {
+pub(crate) enum Descriptor {
     DiskTitleTd,
     AudioUtoc1Td,
     AudioUtoc4Td,
@@ -18,7 +26,7 @@ pub enum Descriptor {
 }
 
 impl Descriptor {
-    fn as_str(&self) -> &str {
+    fn as_str(self) -> &'static str {
         match self {
             Descriptor::DiskTitleTd => "10 1801",
             Descriptor::AudioUtoc1Td => "10 1802",
@@ -33,14 +41,14 @@ impl Descriptor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DescriptorAction {
+pub(crate) enum DescriptorAction {
     OpenRead,
     OpenWrite,
     Close,
 }
 
 impl DescriptorAction {
-    fn as_str(&self) -> &str {
+    fn as_str(self) -> &'static str {
         match self {
             DescriptorAction::OpenRead => "01",
             DescriptorAction::OpenWrite => "03",
@@ -49,11 +57,11 @@ impl DescriptorAction {
     }
 }
 
-pub struct DescriptorCommand(pub Descriptor, pub DescriptorAction);
+pub(crate) struct DescriptorCommand(pub(crate) Descriptor, pub(crate) DescriptorAction);
 
 impl NetMD {
     /// Opens then closes a descriptor TD. Mirrors `changeDescriptorState`.
-    pub fn change_descriptor_state(
+    pub(crate) fn change_descriptor_state(
         &self,
         descriptor: Descriptor,
         action: DescriptorAction,

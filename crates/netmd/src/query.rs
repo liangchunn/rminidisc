@@ -1,6 +1,13 @@
+//! Building protocol query byte strings.
+//!
+//! [`QueryBuilder`] assembles a NetMD control message from raw hex fragments and
+//! typed fields (`u8`/`u16`/...) into a [`Query`]. The hex strings include the
+//! leading `00` status byte (the JS port prepends it at send time). See
+//! `PORTING_REFERENCE.md` for the template language.
+
 use crate::error::{NetMDError, Result};
 
-pub struct Query(pub(crate) Vec<u8>);
+pub(crate) struct Query(pub(crate) Vec<u8>);
 
 impl From<Query> for Vec<u8> {
     fn from(val: Query) -> Self {
@@ -16,46 +23,46 @@ impl From<Query> for Vec<u8> {
 /// `FORMAT_TYPE_LEN_DICT` behaviour. Use [`QueryBuilder::raw`] for the static hex
 /// portions of a command.
 #[derive(Debug, Clone, Default)]
-pub struct QueryBuilder(Vec<u8>);
+pub(crate) struct QueryBuilder(Vec<u8>);
 
 impl QueryBuilder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         QueryBuilder(Vec::new())
     }
 
     /// Appends static bytes parsed from a hex string (whitespace ignored).
     /// Mirrors the literal hex pairs in a `formatQuery` format string.
-    pub fn raw(mut self, hex: &str) -> Result<Self> {
+    pub(crate) fn raw(mut self, hex: &str) -> Result<Self> {
         let q = Query::from_raw(hex)?;
         self.0.extend_from_slice(&q.0);
         Ok(self)
     }
 
     /// Appends a single byte (`%b`).
-    pub fn u8(mut self, value: u8) -> Self {
+    pub(crate) fn u8(mut self, value: u8) -> Self {
         self.0.push(value);
         self
     }
 
     /// Appends a big-endian u16 (`%w`).
-    pub fn u16(mut self, value: u16) -> Self {
+    pub(crate) fn u16(mut self, value: u16) -> Self {
         self.0.extend_from_slice(&value.to_be_bytes());
         self
     }
 
     /// Appends a big-endian u32 (`%d`).
-    pub fn u32(mut self, value: u32) -> Self {
+    pub(crate) fn u32(mut self, value: u32) -> Self {
         self.0.extend_from_slice(&value.to_be_bytes());
         self
     }
 
     /// Appends raw bytes verbatim (`%*`).
-    pub fn bytes(mut self, value: &[u8]) -> Self {
+    pub(crate) fn bytes(mut self, value: &[u8]) -> Self {
         self.0.extend_from_slice(value);
         self
     }
 
-    pub fn build(self) -> Query {
+    pub(crate) fn build(self) -> Query {
         Query(self.0)
     }
 }
@@ -67,7 +74,7 @@ impl From<QueryBuilder> for Query {
 }
 
 impl Query {
-    pub fn from_raw(value: &str) -> Result<Query> {
+    pub(crate) fn from_raw(value: &str) -> Result<Query> {
         let new_string = value
             .chars()
             .filter(|c| !c.is_whitespace())

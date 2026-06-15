@@ -1,3 +1,10 @@
+//! Low-level USB transport: sending queries and reading protocol replies.
+//!
+//! Implements the NetMD control message exchange over libusb control/bulk
+//! transfers, including interim-reply polling and retries. Higher-level command
+//! modules build [`crate::query::Query`] values and parse the responses with
+//! [`crate::scan`].
+
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -17,7 +24,7 @@ use super::NetMD;
 
 /// USB bulk OUT endpoint address for track data. WebUSB endpoint `0x02`
 /// (`netmd.ts:6`) maps to rusb endpoint address `0x02`.
-pub const BULK_WRITE_ENDPOINT: u8 = 0x02;
+pub(crate) const BULK_WRITE_ENDPOINT: u8 = 0x02;
 
 /// Maximum bytes per single bulk-OUT libusb call.
 ///
@@ -31,7 +38,7 @@ pub const BULK_WRITE_ENDPOINT: u8 = 0x02;
 const BULK_WRITE_CHUNK: usize = 0x10000;
 
 impl NetMD {
-    pub fn send_query<M>(&self, message: M) -> Result<ReadRequestData>
+    pub(crate) fn send_query<M>(&self, message: M) -> Result<ReadRequestData>
     where
         M: TryInto<Query>,
         NetMDError: From<M::Error>,
@@ -46,7 +53,7 @@ impl NetMD {
     /// - The reply is read; if the status byte is interim (`0x0f`) and
     ///   `accept_interim` is false, the read is retried with exponential backoff.
     /// - `0x08` maps to `NotImplemented`, `0x0a` to `Rejected`.
-    pub fn send_query_ext<M>(&self, message: M, accept_interim: bool) -> Result<ReadRequestData>
+    pub(crate) fn send_query_ext<M>(&self, message: M, accept_interim: bool) -> Result<ReadRequestData>
     where
         M: TryInto<Query>,
         NetMDError: From<M::Error>,
@@ -79,12 +86,8 @@ impl NetMD {
         let mut attempt: u32 = 0;
         while attempt < MAX_INTERIM_ATTEMPTS {
             let data = self.read_reply()?;
-            let status: ProtocolReply = data
-                .0
-                .first()
-                .copied()
-                .ok_or(NetMDError::UnknownStatus(0))?
-                .into();
+            let status_byte = data.0.first().copied().ok_or(NetMDError::UnknownStatus(0))?;
+            let status: ProtocolReply = status_byte.into();
 
             match status {
                 ProtocolReply::NotImplemented => return Err(NetMDError::NotImplemented),
@@ -108,7 +111,7 @@ impl NetMD {
                 | ProtocolReply::Interim => {
                     return Ok(data);
                 }
-                other => return Err(NetMDError::UnknownStatus(other as u8)),
+                _ => return Err(NetMDError::UnknownStatus(status_byte)),
             }
         }
         Err(NetMDError::MaxInterimAttempts)
@@ -116,7 +119,7 @@ impl NetMD {
 
     /// Reads the reply length header (request `0x01`). The third byte holds the
     /// payload length. Mirrors `NetMD.getReplyLength`.
-    pub fn read_reply_length(&self) -> std::result::Result<ReadRequestHeader, rusb::Error> {
+    pub(crate) fn read_reply_length(&self) -> std::result::Result<ReadRequestHeader, rusb::Error> {
         let mut reply_header = ReadRequestHeader::new();
         self.handle.read_control(
             request_type(
@@ -134,7 +137,7 @@ impl NetMD {
         Ok(reply_header)
     }
 
-    pub fn read_reply(&self) -> std::result::Result<ReadRequestData, rusb::Error> {
+    pub(crate) fn read_reply(&self) -> std::result::Result<ReadRequestData, rusb::Error> {
         let mut reply_header = self.read_reply_length()?;
         let mut i: u32 = 0;
         while reply_header.is_empty() {
@@ -206,9 +209,9 @@ impl NetMD {
     }
 
     /// Writes data to the bulk OUT endpoint. Mirrors `NetMD.writeBulk` (`netmd.ts:231`),
-    /// except it splits the write into [`BULK_WRITE_CHUNK`]-sized libusb calls (see
+    /// except it splits the write into `BULK_WRITE_CHUNK`-sized libusb calls (see
     /// the constant's docs) so large SP payloads transfer reliably.
-    pub fn write_bulk(&self, data: &[u8]) -> Result<()> {
+    pub(crate) fn write_bulk(&self, data: &[u8]) -> Result<()> {
         let mut written = 0;
         while written < data.len() {
             let end = (written + BULK_WRITE_CHUNK).min(data.len());

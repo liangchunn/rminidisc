@@ -437,7 +437,7 @@ fn cmd_groups(device: Option<netmd::DeviceSelector>) -> anyhow::Result<()> {
         netmd::format_time_from_frames(disc.left),
     );
 
-    let remaining = netmd::remaining_characters_for_titles(&disc, true);
+    let remaining = disc.remaining_title_chars(true);
     info!(
         "title space left: half-width={} chars full-width={} chars",
         remaining.half_width, remaining.full_width

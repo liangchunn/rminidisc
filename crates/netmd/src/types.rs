@@ -1,18 +1,25 @@
+//! Shared data types used across the crate's public API.
+//!
+//! Includes the structured listing types ([`Disc`], [`Group`], [`Track`]),
+//! format/encoding enums ([`Wireformat`], [`Encoding`], [`DiscFormat`],
+//! [`ChannelCount`]), status types ([`DeviceStatus`], [`OperatingStatus`],
+//! [`PlaybackState`]).
+
 use std::fmt::Display;
 
 use crate::scan::scan;
 
-pub const USB_TIMEOUT_MILLIS: u64 = 500;
+pub(crate) const USB_TIMEOUT_MILLIS: u64 = 500;
 
-pub const INTERIM_RETRY_INTERVAL_MS: u64 = 100;
+pub(crate) const INTERIM_RETRY_INTERVAL_MS: u64 = 100;
 
-pub const MAX_INTERIM_ATTEMPTS: u32 = 4;
+pub(crate) const MAX_INTERIM_ATTEMPTS: u32 = 4;
 
-pub const READ_REPLY_POLL_INTERVAL_MS: u64 = 10;
+pub(crate) const READ_REPLY_POLL_INTERVAL_MS: u64 = 10;
 
 #[repr(u8)]
 #[derive(Debug)]
-pub enum ProtocolReply {
+pub(crate) enum ProtocolReply {
     Control = 0x00,
     Status = 0x01,
     SpecificInquiry = 0x02,
@@ -25,6 +32,10 @@ pub enum ProtocolReply {
     Implemented = 0x0c,
     Changed = 0x0d,
     Interim = 0x0f,
+    /// Any status byte not defined by the protocol. Carries the raw byte so the
+    /// transport layer can surface it as [`crate::error::NetMDError::UnknownStatus`]
+    /// instead of panicking on unexpected hardware/bus data.
+    Unknown(u8),
 }
 
 impl From<u8> for ProtocolReply {
@@ -42,7 +53,7 @@ impl From<u8> for ProtocolReply {
             0x0c => ProtocolReply::Implemented,
             0x0d => ProtocolReply::Changed,
             0x0f => ProtocolReply::Interim,
-            _ => unimplemented!(),
+            other => ProtocolReply::Unknown(other),
         }
     }
 }
@@ -228,14 +239,14 @@ pub struct DeviceStatus {
     pub time: Option<PlaybackTime>,
 }
 
-pub const FRAME_SIZE: &[(Wireformat, usize)] = &[
+pub(crate) const FRAME_SIZE: &[(Wireformat, usize)] = &[
     (Wireformat::Pcm, 2048),
     (Wireformat::Lp2, 192),
     (Wireformat::L105kbps, 152),
     (Wireformat::Lp4, 96),
 ];
 
-pub struct ReadRequestHeader(pub [u8; 4]);
+pub(crate) struct ReadRequestHeader(pub(crate) [u8; 4]);
 
 impl Default for ReadRequestHeader {
     fn default() -> Self {
@@ -244,15 +255,15 @@ impl Default for ReadRequestHeader {
 }
 
 impl ReadRequestHeader {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         ReadRequestHeader([0; 4])
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.0[2] as usize
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
@@ -298,16 +309,16 @@ pub struct Disc {
 }
 
 #[derive(Debug)]
-pub struct ReadRequestData(pub(crate) Vec<u8>);
+pub(crate) struct ReadRequestData(pub(crate) Vec<u8>);
 
 impl ReadRequestData {
-    pub fn scan<'b, 'a: 'b>(&'a self, template: &'a str) -> crate::error::Result<Vec<&'b [u8]>> {
+    pub(crate) fn scan<'b, 'a: 'b>(&'a self, template: &'a str) -> crate::error::Result<Vec<&'b [u8]>> {
         scan(template, &self.0)
     }
 }
 
 impl ReadRequestData {
-    pub fn new(size: usize) -> Self {
+    pub(crate) fn new(size: usize) -> Self {
         ReadRequestData(vec![0; size])
     }
 }

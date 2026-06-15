@@ -10,17 +10,17 @@ const SONY_VENDOR_ID: u16 = 0x054c;
 const CORRUPTED_DECK_PRODUCT_ID: u16 = 0x0081;
 
 /// Data needed to perform the key exchange with a device.
-pub struct Ekb {
+pub(crate) struct Ekb {
     /// The root key used to derive the session key via `retailmac`.
-    pub root_key: [u8; 16],
+    pub(crate) root_key: [u8; 16],
     /// The EKB identifier (`sendKeyData` argument).
-    pub ekb_id: u32,
+    pub(crate) ekb_id: u32,
     /// The key chain (each entry is 16 bytes).
-    pub key_chain: Vec<[u8; 16]>,
+    pub(crate) key_chain: Vec<[u8; 16]>,
     /// The key chain depth.
-    pub depth: u8,
+    pub(crate) depth: u8,
     /// The 24-byte EKB signature.
-    pub signature: [u8; 24],
+    pub(crate) signature: [u8; 24],
 }
 
 impl Ekb {
@@ -34,7 +34,7 @@ impl Ekb {
     /// Selects the appropriate EKB for the device. Mirrors `getEKBForDevice`
     /// (`netmd-ekb.ts`) by checking the deck-specific EKB before the catch-all
     /// open-source EKB.
-    pub fn get_ekb_for_device(leaf_id: &[u8], vendor: u16, product: u16) -> Ekb {
+    pub(crate) fn get_ekb_for_device(leaf_id: &[u8], vendor: u16, product: u16) -> Ekb {
         if Self::is_corrupted_deck_ekb_match(leaf_id, vendor, product) {
             trace!("selected corrupted-deck EKB (vendor={vendor:04x} product={product:04x})");
             Self::corrupted_deck_ekb()

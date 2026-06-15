@@ -1,8 +1,14 @@
+//! Title sanitization for half-width and full-width NetMD title tables.
+//!
+//! Normalizes Unicode and maps characters to what the device can store,
+//! including half-width/full-width range conversion and length accounting in
+//! the device's character cells.
+
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
 use crate::util::encode_to_sjis;
 
-pub fn half_width_to_full_width_range(range: &str) -> String {
+pub(crate) fn half_width_to_full_width_range(range: &str) -> String {
     range
         .chars()
         .filter_map(|c| match c {
@@ -24,7 +30,7 @@ pub fn half_width_to_full_width_range(range: &str) -> String {
         .collect()
 }
 
-pub fn get_half_width_title_length(title: &str) -> usize {
+pub(crate) fn get_half_width_title_length(title: &str) -> usize {
     title.encode_utf16().count()
         + title
             .chars()
@@ -32,7 +38,7 @@ pub fn get_half_width_title_length(title: &str) -> usize {
             .count()
 }
 
-pub fn sanitize_half_width_title(title: &str) -> String {
+pub(crate) fn sanitize_half_width_title(title: &str) -> String {
     let original_title = title;
     let title = flatten_dakuten(&sanitize_full_width_title_remap(title));
 
@@ -61,7 +67,7 @@ pub fn sanitize_half_width_title(title: &str) -> String {
     }
 }
 
-pub fn sanitize_full_width_title(title: &str) -> String {
+pub(crate) fn sanitize_full_width_title(title: &str) -> String {
     let new_title = sanitize_full_width_title_remap(title);
     match encode_to_sjis(&new_title) {
         Ok(encoded) if encoded.len() == title.encode_utf16().count() * 2 => new_title,

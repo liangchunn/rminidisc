@@ -1,3 +1,10 @@
+//! Secure session primitives for the encrypted upload pipeline.
+//!
+//! Wraps the NetMD secure command set: session acquire/release, leaf-ID and EKB
+//! key exchange, [`NetMD::session_key_exchange`], download setup, encrypted
+//! [`NetMD::send_track`], and [`NetMD::commit_track`]. These are the building
+//! blocks orchestrated by [`NetMD::download_track`] in [`crate::track`].
+
 use std::borrow::Cow;
 use std::thread::sleep;
 use std::time::Duration;
@@ -18,23 +25,25 @@ const SECURE_PREFIX: &str = "00 1800 080046 f0030103";
 
 impl NetMD {
     /// Acquires the device lock (`ff 010c ...`). Mirrors `NetMDInterface.acquire`.
-    pub fn acquire(&self) -> Result<()> {
+    pub(crate) fn acquire(&self) -> Result<()> {
         debug!("acquire");
-        let reply = self.send_query("00 ff 010c ffff ffff ffff ffff ffff ffff")?;
+        let reply =
+            self.send_query(QueryBuilder::new().raw("00 ff 010c ffff ffff ffff ffff ffff ffff")?)?;
         reply.scan("%? ff 010c ffff ffff ffff ffff ffff ffff")?;
         Ok(())
     }
 
     /// Releases the device lock (`ff 0100 ...`). Mirrors `NetMDInterface.release`.
-    pub fn release(&self) -> Result<()> {
+    pub(crate) fn release(&self) -> Result<()> {
         debug!("release");
-        let reply = self.send_query("00 ff 0100 ffff ffff ffff ffff ffff ffff")?;
+        let reply =
+            self.send_query(QueryBuilder::new().raw("00 ff 0100 ffff ffff ffff ffff ffff ffff")?)?;
         reply.scan("%? ff 0100 ffff ffff ffff ffff ffff ffff")?;
         Ok(())
     }
 
     /// Enters a secure session. Mirrors `enterSecureSession` (`netmd-interface.ts:729`).
-    pub fn enter_secure_session(&self) -> Result<()> {
+    pub(crate) fn enter_secure_session(&self) -> Result<()> {
         debug!("enter secure session");
         let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("80 ff")?;
         let reply = self.send_query(query)?;
@@ -43,7 +52,7 @@ impl NetMD {
     }
 
     /// Leaves a secure session. Mirrors `leaveSecureSession` (`netmd-interface.ts:735`).
-    pub fn leave_secure_session(&self) -> Result<()> {
+    pub(crate) fn leave_secure_session(&self) -> Result<()> {
         debug!("leave secure session");
         let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("81 ff")?;
         let reply = self.send_query(query)?;
@@ -52,7 +61,7 @@ impl NetMD {
     }
 
     /// Reads the device leaf ID. Mirrors `getLeafID` (`netmd-interface.ts:747`).
-    pub fn get_leaf_id(&self) -> Result<Vec<u8>> {
+    pub(crate) fn get_leaf_id(&self) -> Result<Vec<u8>> {
         debug!("get leaf id");
         let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("11 ff")?;
         let reply = self.send_query(query)?;
@@ -61,7 +70,7 @@ impl NetMD {
     }
 
     /// Sends the EKB key data. Mirrors `sendKeyData` (`netmd-interface.ts:754`).
-    pub fn send_key_data(
+    pub(crate) fn send_key_data(
         &self,
         ekb_id: u32,
         key_chain: &[[u8; 16]],
@@ -100,7 +109,7 @@ impl NetMD {
 
     /// Performs session key exchange. Mirrors `sessionKeyExchange` (`netmd-interface.ts:783`).
     /// Returns the 8-byte device nonce.
-    pub fn session_key_exchange(&self, host_nonce: &[u8; 8]) -> Result<[u8; 8]> {
+    pub(crate) fn session_key_exchange(&self, host_nonce: &[u8; 8]) -> Result<[u8; 8]> {
         debug!("session key exchange");
         let query = QueryBuilder::new()
             .raw(SECURE_PREFIX)?
@@ -115,7 +124,7 @@ impl NetMD {
     }
 
     /// Forgets the session key. Mirrors `sessionKeyForget` (`netmd-interface.ts:792`).
-    pub fn session_key_forget(&self) -> Result<()> {
+    pub(crate) fn session_key_forget(&self) -> Result<()> {
         debug!("session key forget");
         let query = QueryBuilder::new()
             .raw(SECURE_PREFIX)?
@@ -126,7 +135,7 @@ impl NetMD {
     }
 
     /// Sets up a download. Mirrors `setupDownload` (`netmd-interface.ts:798`).
-    pub fn setup_download(
+    pub(crate) fn setup_download(
         &self,
         content_id: &[u8; 20],
         kek: &[u8; 8],
@@ -150,7 +159,7 @@ impl NetMD {
 
     /// Disables new-track copy protection. Mirrors `disableNewTrackProtection`
     /// (`netmd-interface.ts:723`).
-    pub fn disable_new_track_protection(&self, val: u16) -> Result<()> {
+    pub(crate) fn disable_new_track_protection(&self, val: u16) -> Result<()> {
         debug!("disable new track protection ({val})");
         let query = QueryBuilder::new()
             .raw(SECURE_PREFIX)?
@@ -162,7 +171,7 @@ impl NetMD {
     }
 
     /// Commits a track after upload. Mirrors `commitTrack` (`netmd-interface.ts:822`).
-    pub fn commit_track(&self, track: u16, session_key: &[u8; 8]) -> Result<()> {
+    pub(crate) fn commit_track(&self, track: u16, session_key: &[u8; 8]) -> Result<()> {
         debug!("commit track #{track}");
         let authentication = crypto::des_ecb_encrypt(session_key, &[0u8; 8]);
         let query = QueryBuilder::new()
@@ -176,7 +185,7 @@ impl NetMD {
     }
 
     /// Terminates the secure session lifecycle. Mirrors `terminate` (`netmd-interface.ts:909`).
-    pub fn terminate(&self) -> Result<()> {
+    pub(crate) fn terminate(&self) -> Result<()> {
         debug!("terminate");
         let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("2a ff00")?;
         self.send_query(query)?;
@@ -188,7 +197,7 @@ impl NetMD {
     ///
     /// Returns `(track_number, uuid_hex, content_id_hex)`.
     #[allow(clippy::too_many_arguments)]
-    pub fn send_track(
+    pub(crate) fn send_track(
         &self,
         wireformat: u8,
         discformat: u8,
@@ -270,11 +279,11 @@ impl NetMD {
 
     /// Waits until the device is ready/blank for a download, then acquires it and
     /// disables new-track protection. Mirrors `prepareDownload` (`netmd-commands.ts:444`).
-    pub fn prepare_download(&self) -> Result<()> {
+    pub(crate) fn prepare_download(&self) -> Result<()> {
         debug!("prepare download");
         for i in 0..50 {
             match self.get_operating_status() {
-                Ok(OperatingStatus::Ready) | Ok(OperatingStatus::BlankDisc) => {
+                Ok(OperatingStatus::Ready | OperatingStatus::BlankDisc) => {
                     info!("device ready for download (poll #{i})");
                     break;
                 }

@@ -21,7 +21,7 @@ type DesEcbDec = ecb::Decryptor<Des>;
 type TdesCbcEnc = cbc::Encryptor<TdesEde2>;
 
 /// DES-CBC encrypt without padding. `data.len()` must be a multiple of 8.
-pub fn des_cbc_encrypt(key: &[u8; 8], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn des_cbc_encrypt(key: &[u8; 8], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
     assert_eq!(data.len() % 8, 0, "des_cbc_encrypt: data not block-aligned");
     let mut buf = data.to_vec();
     let mut enc = DesCbcEnc::new(key.into(), iv.into());
@@ -33,7 +33,7 @@ pub fn des_cbc_encrypt(key: &[u8; 8], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
 }
 
 /// DES-CBC decrypt without padding. `data.len()` must be a multiple of 8.
-pub fn des_cbc_decrypt(key: &[u8; 8], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn des_cbc_decrypt(key: &[u8; 8], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
     assert_eq!(data.len() % 8, 0, "des_cbc_decrypt: data not block-aligned");
     let mut buf = data.to_vec();
     let mut dec = DesCbcDec::new(key.into(), iv.into());
@@ -45,7 +45,7 @@ pub fn des_cbc_decrypt(key: &[u8; 8], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
 }
 
 /// DES-ECB encrypt without padding. `data.len()` must be a multiple of 8.
-pub fn des_ecb_encrypt(key: &[u8; 8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn des_ecb_encrypt(key: &[u8; 8], data: &[u8]) -> Vec<u8> {
     assert_eq!(data.len() % 8, 0, "des_ecb_encrypt: data not block-aligned");
     let mut buf = data.to_vec();
     let mut enc = DesEcbEnc::new(key.into());
@@ -57,7 +57,7 @@ pub fn des_ecb_encrypt(key: &[u8; 8], data: &[u8]) -> Vec<u8> {
 }
 
 /// DES-ECB decrypt without padding. `data.len()` must be a multiple of 8.
-pub fn des_ecb_decrypt(key: &[u8; 8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn des_ecb_decrypt(key: &[u8; 8], data: &[u8]) -> Vec<u8> {
     assert_eq!(data.len() % 8, 0, "des_ecb_decrypt: data not block-aligned");
     let mut buf = data.to_vec();
     let mut dec = DesEcbDec::new(key.into());
@@ -69,7 +69,7 @@ pub fn des_ecb_decrypt(key: &[u8; 8], data: &[u8]) -> Vec<u8> {
 }
 
 /// Two-key Triple-DES CBC encrypt without padding. Key is 16 bytes.
-pub fn tdes_cbc_encrypt(key: &[u8; 16], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
+pub(crate) fn tdes_cbc_encrypt(key: &[u8; 16], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
     assert_eq!(
         data.len() % 8,
         0,
@@ -94,7 +94,7 @@ pub fn tdes_cbc_encrypt(key: &[u8; 16], iv: &[u8; 8], data: &[u8]) -> Vec<u8> {
 ///
 /// Returns the 8-byte MAC (the JS returns it as 16 hex chars; we keep raw bytes
 /// and let callers hex-encode if needed — but the session key is used as bytes).
-pub fn retailmac(key: &[u8; 16], value: &[u8], iv: &[u8; 8]) -> [u8; 8] {
+pub(crate) fn retailmac(key: &[u8; 16], value: &[u8], iv: &[u8; 8]) -> [u8; 8] {
     assert!(value.len() >= 8, "retailmac: value too short");
     assert_eq!(value.len() % 8, 0, "retailmac: value not block-aligned");
     trace!("retailmac: value_len={} iv=...", value.len());
@@ -113,14 +113,14 @@ pub fn retailmac(key: &[u8; 16], value: &[u8], iv: &[u8; 8]) -> [u8; 8] {
 }
 
 /// One encrypted packet to send over the bulk endpoint.
-pub struct EncryptedPacket {
+pub(crate) struct EncryptedPacket {
     /// The wrapped data key (KEK-decrypted random key), 8 bytes. Sent in the
     /// first packet header only.
-    pub key: [u8; 8],
+    pub(crate) key: [u8; 8],
     /// The IV for this packet (8 bytes). Sent in the first packet header only.
-    pub iv: [u8; 8],
+    pub(crate) iv: [u8; 8],
     /// The DES-CBC-encrypted audio chunk.
-    pub data: Vec<u8>,
+    pub(crate) data: Vec<u8>,
 }
 
 /// Encrypts the track payload into packets.
@@ -132,7 +132,7 @@ pub struct EncryptedPacket {
 ///   to leave room for the packet header) and each chunk is DES-CBC encrypted
 ///   with `rawKey`, chaining the IV from the previous ciphertext's last block.
 /// - `data` is padded to a multiple of `frame_size` with zeros first.
-pub fn encrypt_packets(kek: &[u8; 8], frame_size: usize, data: &[u8]) -> Vec<EncryptedPacket> {
+pub(crate) fn encrypt_packets(kek: &[u8; 8], frame_size: usize, data: &[u8]) -> Vec<EncryptedPacket> {
     use rand::Rng;
 
     trace!(

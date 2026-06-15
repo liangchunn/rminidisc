@@ -1,8 +1,15 @@
+//! Per-track metadata and editing.
+//!
+//! Reads track titles, count, length, encoding, and protection flags, and edits
+//! the disc: renaming tracks, [`NetMD::move_track`], [`NetMD::erase_track`], and
+//! [`NetMD::erase_disc`]. All track indices are 0-based.
+
 use log::{debug, info, trace};
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
     error::{NetMDError, Result},
+    query::QueryBuilder,
     scan::scan,
     title::{sanitize_full_width_title, sanitize_half_width_title},
     types::{ChannelCount, Encoding},
@@ -25,10 +32,11 @@ impl NetMD {
             Descriptor::AudioUtoc1Td
         };
         self.change_descriptor_state(descriptor, DescriptorAction::OpenRead)?;
-        let query = format!(
-            "00 1806 022018{:02x} {:04x} 3000 0a00 ff00 00000000",
-            wchar_value, track
-        );
+        let query = QueryBuilder::new()
+            .raw("00 1806 0220 18")?
+            .u8(wchar_value)
+            .u16(track)
+            .raw("3000 0a00 ff00 00000000")?;
         let reply = self.send_query(query)?;
         let data = reply.scan("%? 1806 022018%? %?%? %?%? %?%? 1000 00%?0000 00%?000a %x")?;
         let title = parse_string(data[0])?;
@@ -39,7 +47,8 @@ impl NetMD {
     pub fn get_track_count(&self) -> Result<u8> {
         debug!("get track count");
         self.change_descriptor_state(Descriptor::AudioContentsTd, DescriptorAction::OpenRead)?;
-        let reply = self.send_query("00 1806 02101001 3000 1000 ff00 00000000")?;
+        let reply =
+            self.send_query(QueryBuilder::new().raw("00 1806 02101001 3000 1000 ff00 00000000")?)?;
 
         let data = reply.scan("%? 1806 02101001 %?%? %?%? 1000 00%?0000 0006 0010000200%b")?;
 
@@ -76,13 +85,17 @@ impl NetMD {
         };
 
         let sjis = encode_to_sjis(&title)?;
-        let sjis_hex = sjis.iter().map(|b| format!("{b:02x}")).collect::<String>();
 
         self.change_descriptor_state(descriptor, DescriptorAction::OpenWrite)?;
-        let query = format!(
-            "00 1807 022018{:02x} {:04x} 3000 0a00 5000 {:04x} 0000 {:04x} {}",
-            wchar_value, track, new_len, old_len, sjis_hex
-        );
+        let query = QueryBuilder::new()
+            .raw("00 1807 0220 18")?
+            .u8(wchar_value)
+            .u16(track)
+            .raw("3000 0a00 5000")?
+            .u16(new_len as u16)
+            .raw("0000")?
+            .u16(old_len as u16)
+            .bytes(&sjis);
         let reply = self.send_query(query)?;
         reply.scan("%? 1807 022018%? %?%? 3000 0a00 5000 %?%? 0000 %?%?")?;
         self.change_descriptor_state(descriptor, DescriptorAction::Close)?;
@@ -94,10 +107,12 @@ impl NetMD {
     pub fn get_track_info(&self, track: u16, p1: u16, p2: u16) -> Result<Vec<u8>> {
         trace!("get track info #{track} (p1=0x{p1:04x} p2=0x{p2:04x})");
         self.change_descriptor_state(Descriptor::AudioContentsTd, DescriptorAction::OpenRead)?;
-        let query = format!(
-            "00 1806 02201001 {:04x} {:04x} {:04x} ff00 00000000",
-            track, p1, p2
-        );
+        let query = QueryBuilder::new()
+            .raw("00 1806 02201001")?
+            .u16(track)
+            .u16(p1)
+            .u16(p2)
+            .raw("ff00 00000000")?;
         let reply = self.send_query(query)?;
         let data = reply.scan("%? 1806 02201001 %?%? %?%? %?%? 1000 00%?0000 %x")?;
         let raw = data[0].to_vec();
@@ -133,7 +148,10 @@ impl NetMD {
     pub fn get_track_flags(&self, track: u16) -> Result<u8> {
         trace!("get track flags #{track}");
         self.change_descriptor_state(Descriptor::AudioContentsTd, DescriptorAction::OpenRead)?;
-        let query = format!("00 1806 01201001 {:04x} ff00 00010008", track);
+        let query = QueryBuilder::new()
+            .raw("00 1806 01201001")?
+            .u16(track)
+            .raw("ff00 00010008")?;
         let reply = self.send_query(query)?;
         let data = reply.scan("%? 1806 01201001 %?%? 10 00 00010008 %b")?;
         let flags = parse_u8(data[0])?;
@@ -145,7 +163,9 @@ impl NetMD {
     /// DESTRUCTIVE.
     pub fn erase_track(&self, track: u16) -> Result<()> {
         info!("erase track #{track}");
-        let query = format!("00 1840 ff01 00 201001 {:04x}", track);
+        let query = QueryBuilder::new()
+            .raw("00 1840 ff01 00 201001")?
+            .u16(track);
         self.send_query(query)?;
         Ok(())
     }
@@ -154,7 +174,11 @@ impl NetMD {
     /// DESTRUCTIVE (reorders disc).
     pub fn move_track(&self, source: u16, dest: u16) -> Result<()> {
         info!("move track {source} -> {dest}");
-        let query = format!("00 1843 ff00 00 201001 {:04x} 201001 {:04x}", source, dest);
+        let query = QueryBuilder::new()
+            .raw("00 1843 ff00 00 201001")?
+            .u16(source)
+            .raw("201001")?
+            .u16(dest);
         self.send_query(query)?;
         Ok(())
     }
@@ -162,7 +186,7 @@ impl NetMD {
     /// Erases the entire disc. Mirrors `NetMDInterface.eraseDisc`. DESTRUCTIVE.
     pub fn erase_disc(&self) -> Result<()> {
         info!("erase disc");
-        let reply = self.send_query("00 1840 ff 0000")?;
+        let reply = self.send_query(QueryBuilder::new().raw("00 1840 ff 0000")?)?;
         reply.scan("%? 1840 00 0000")?;
         Ok(())
     }

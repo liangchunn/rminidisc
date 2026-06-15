@@ -1,8 +1,15 @@
+//! Playback and transport control.
+//!
+//! Start/stop/pause, fast-forward and rewind, track and time seeking
+//! ([`NetMD::goto_track`], [`NetMD::goto_time`]), eject, and position/parameter
+//! queries.
+
 use log::{debug, trace};
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
     error::{NetMDError, Result},
+    query::QueryBuilder,
     util::{parse_bcd_u8, parse_u16},
 };
 
@@ -27,7 +34,10 @@ enum TrackChange {
 
 impl NetMD {
     fn play_action(&self, action: Action) -> Result<()> {
-        let query = format!("00 18c3 ff {:02x} 000000", action as u8);
+        let query = QueryBuilder::new()
+            .raw("00 18c3 ff")?
+            .u8(action as u8)
+            .raw("000000")?;
         let reply = self.send_query(query)?;
         reply.scan("%? 18c3 00 %b 000000")?;
         Ok(())
@@ -62,7 +72,7 @@ impl NetMD {
     /// As in the JS reference, errors are swallowed (a fix for the Sony LAM-1).
     pub fn stop(&self) -> Result<()> {
         debug!("stop");
-        match self.send_query("00 18c5 ff 00000000") {
+        match self.send_query(QueryBuilder::new().raw("00 18c5 ff 00000000")?) {
             Ok(reply) => {
                 let _ = reply.scan("%? 18c5 00 00000000");
             }
@@ -75,7 +85,7 @@ impl NetMD {
     /// (`:393`). Returns the resulting track index.
     pub fn goto_track(&self, track: u16) -> Result<u16> {
         debug!("goto track #{track}");
-        let query = format!("00 1850 ff010000 0000 {:04x}", track);
+        let query = QueryBuilder::new().raw("00 1850 ff010000 0000")?.u16(track);
         let reply = self.send_query(query)?;
         let data = reply.scan("%? 1850 00010000 0000 %w")?;
         Ok(parse_u16(data[0])?)
@@ -85,17 +95,19 @@ impl NetMD {
     /// frame]`. Mirrors `NetMDInterface.gotoTime` (`:400`).
     pub fn goto_time(&self, track: u16, time: [u8; 4]) -> Result<()> {
         debug!("goto time #{track} {time:?}");
-        let query = format!(
-            "00 1850 ff000000 0000 {:04x} {:02x}{:02x}{:02x}{:02x}",
-            track, time[0], time[1], time[2], time[3]
-        );
+        let query = QueryBuilder::new()
+            .raw("00 1850 ff000000 0000")?
+            .u16(track)
+            .bytes(&time);
         let reply = self.send_query(query)?;
         reply.scan("%? 1850 00000000 %?%? %w %B %B %B %B")?;
         Ok(())
     }
 
     fn track_change(&self, direction: TrackChange) -> Result<()> {
-        let query = format!("00 1850 ff10 00000000 {:04x}", direction as u16);
+        let query = QueryBuilder::new()
+            .raw("00 1850 ff10 00000000")?
+            .u16(direction as u16);
         let reply = self.send_query(query)?;
         reply.scan("%? 1850 0010 00000000 %?%?")?;
         Ok(())
@@ -122,7 +134,7 @@ impl NetMD {
     /// Ejects the disc. Mirrors `NetMDInterface.ejectDisc` (`:347`).
     pub fn eject_disc(&self) -> Result<()> {
         debug!("eject disc");
-        self.send_query("00 18c1 ff 6000")?;
+        self.send_query(QueryBuilder::new().raw("00 18c1 ff 6000")?)?;
         Ok(())
     }
 
@@ -131,15 +143,20 @@ impl NetMD {
     /// treated as "cannot eject".
     pub fn can_eject_disc(&self) -> bool {
         debug!("can eject disc?");
-        self.send_query_ext("00 18c1 ff 6000", true).is_ok()
+        let Ok(query) = QueryBuilder::new().raw("00 18c1 ff 6000") else {
+            return false;
+        };
+        self.send_query_ext(query, true).is_ok()
     }
 
     fn get_playback_status(&self, p1: u16, p2: u16) -> Result<Vec<u8>> {
         self.change_descriptor_state(Descriptor::OperatingStatusBlock, DescriptorAction::OpenRead)?;
-        let query = format!(
-            "00 1809 8001 0330 {:04x} 0030 8805 0030 {:04x} 00 ff00 00000000",
-            p1, p2
-        );
+        let query = QueryBuilder::new()
+            .raw("00 1809 8001 0330")?
+            .u16(p1)
+            .raw("0030 8805 0030")?
+            .u16(p2)
+            .raw("00 ff00 00000000")?;
         let reply = self.send_query(query)?;
         let data = reply.scan("%? 1809 8001 0330 %?%? %?%? %?%? %?%? %?%? %? 1000 00%?0000 %x")?;
         let status = data[0].to_vec();

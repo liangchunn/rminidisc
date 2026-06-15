@@ -125,9 +125,7 @@ pub fn atrac3_info(data: &[u8]) -> Option<(Wireformat, &[u8])> {
 
 /// Returns true if the WAV is plain PCM (used to decide whether to transcode for SP).
 pub fn is_pcm(data: &[u8]) -> bool {
-    parse_wav(data)
-        .map(|i| i.fmt.format_tag == WAVE_FORMAT_PCM)
-        .unwrap_or(false)
+    parse_wav(data).is_ok_and(|i| i.fmt.format_tag == WAVE_FORMAT_PCM)
 }
 
 #[cfg(test)]

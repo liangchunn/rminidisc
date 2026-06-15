@@ -1,3 +1,11 @@
+//! Device enumeration and the [`NetMD`] connection handle.
+//!
+//! Defines the table of [`SUPPORTED_DEVICES`], the [`NetMD`] handle that owns a
+//! claimed USB interface, and the entry points for opening one:
+//! [`open_device`] (auto-select the single attached device) and
+//! [`open_device_matching`] (disambiguate with a [`DeviceSelector`]). Per-area
+//! command methods are implemented on [`NetMD`] across the other modules.
+
 use std::time::Duration;
 
 use log::{debug, info};

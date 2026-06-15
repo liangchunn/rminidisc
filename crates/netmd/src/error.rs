@@ -1,3 +1,9 @@
+//! Crate error type and `Result` alias.
+//!
+//! [`NetMDError`] (re-exported at the crate root as `Error`) covers USB
+//! transport failures, protocol rejections/unknown status bytes, parse errors,
+//! and crypto failures. All fallible APIs return [`Result`].
+
 use std::{array::TryFromSliceError, convert::Infallible};
 
 pub type Result<T> = std::result::Result<T, NetMDError>;

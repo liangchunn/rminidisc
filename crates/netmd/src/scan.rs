@@ -1,3 +1,10 @@
+//! Parsing protocol replies with a template language.
+//!
+//! The `scan` function matches a reply byte buffer against a template of literal hex and
+//! capture/skip directives (`%x`, `%w`, `%b`, `%?`, `%*`, ...), returning the
+//! captured slices. Rust templates start with `%?` to consume the status byte
+//! the JS port strips. See `PORTING_REFERENCE.md` for the full directive list.
+
 use crate::error::{NetMDError, Result};
 
 pub(crate) fn scan<'a>(template: &'a str, data: &'a [u8]) -> Result<Vec<&'a [u8]>> {

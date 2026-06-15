@@ -1,3 +1,9 @@
+//! High-level aggregate commands that compose several lower-level calls.
+//!
+//! Provides [`NetMD::list_content`], which assembles a full structured [`Disc`]
+//! (title, capacity, and every track grouped), and [`NetMD::get_device_status`],
+//! which returns a [`DeviceStatus`] playback snapshot. Mirrors `netmd-commands.ts`.
+
 use log::debug;
 
 use crate::{
@@ -72,8 +78,9 @@ impl NetMD {
                 let protected = TrackFlag::from_byte(self.get_track_flags(track_index)?);
                 group.tracks.push(Track {
                     index: track_index,
-                    title: non_empty(self.get_track_title(track_index, false)?),
-                    full_width_title: non_empty(self.get_track_title(track_index, true)?),
+                    title: Some(self.get_track_title(track_index, false)?).filter(|s| !s.is_empty()),
+                    full_width_title: Some(self.get_track_title(track_index, true)?)
+                        .filter(|s| !s.is_empty()),
                     duration_frames,
                     channel,
                     encoding,
@@ -84,24 +91,6 @@ impl NetMD {
         }
 
         Ok(disc)
-    }
-}
-
-#[must_use]
-pub fn count_tracks_in_disc(disc: &Disc) -> usize {
-    crate::groups::count_tracks_in_disc(disc)
-}
-
-#[must_use]
-pub fn tracks(disc: &Disc) -> Vec<&Track> {
-    crate::groups::tracks(disc)
-}
-
-fn non_empty(s: String) -> Option<String> {
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
     }
 }
 
@@ -117,9 +106,7 @@ fn derive_device_status(
     disc_present: bool,
     position: Option<[u32; 5]>,
 ) -> DeviceStatus {
-    let mut state = operating_status
-        .map(PlaybackState::from_u16)
-        .unwrap_or(PlaybackState::Unknown(0));
+    let mut state = operating_status.map_or(PlaybackState::Unknown(0), PlaybackState::from_u16);
 
     if state == PlaybackState::Playing && !disc_present {
         state = PlaybackState::Ready;

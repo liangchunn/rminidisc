@@ -1,20 +1,26 @@
+//! Parsing and formatting helpers shared across protocol modules.
+//!
+//! Byte/BCD parsing ([`parse_u8`], [`parse_u16`], [`parse_bcd_u8`], ...),
+//! Shift-JIS string encode/decode for titles, and NetMD frame/time conversion
+//! ([`time_to_frames`], [`format_time_from_frames`]).
+
 use std::array::TryFromSliceError;
 
 use crate::error::NetMDError;
 
-pub fn parse_u16(buf: &[u8]) -> Result<u16, TryFromSliceError> {
+pub(crate) fn parse_u16(buf: &[u8]) -> Result<u16, TryFromSliceError> {
     Ok(u16::from_be_bytes(<[u8; 2]>::try_from(buf)?))
 }
 
-pub fn parse_u8(buf: &[u8]) -> Result<u8, TryFromSliceError> {
+pub(crate) fn parse_u8(buf: &[u8]) -> Result<u8, TryFromSliceError> {
     <[u8; 1]>::try_from(buf).map(|b| b[0])
 }
 
-pub fn parse_u32(buf: &[u8]) -> Result<u32, TryFromSliceError> {
+pub(crate) fn parse_u32(buf: &[u8]) -> Result<u32, TryFromSliceError> {
     Ok(u32::from_be_bytes(<[u8; 4]>::try_from(buf)?))
 }
 
-pub fn parse_string(buf: &[u8]) -> crate::error::Result<String> {
+pub(crate) fn parse_string(buf: &[u8]) -> crate::error::Result<String> {
     let (title, _encoding, errors) = encoding_rs::SHIFT_JIS.decode(buf);
 
     if errors {
@@ -26,7 +32,7 @@ pub fn parse_string(buf: &[u8]) -> crate::error::Result<String> {
     Ok(title.to_string())
 }
 
-pub fn encode_to_sjis(utf8: &str) -> crate::error::Result<Vec<u8>> {
+pub(crate) fn encode_to_sjis(utf8: &str) -> crate::error::Result<Vec<u8>> {
     let (encoded, _encoding, errors) = encoding_rs::SHIFT_JIS.encode(utf8);
     if errors {
         return Err(NetMDError::TextEncoding(
@@ -36,11 +42,11 @@ pub fn encode_to_sjis(utf8: &str) -> crate::error::Result<Vec<u8>> {
     Ok(encoded.into_owned())
 }
 
-pub fn get_length_after_sjis_encode(utf8: &str) -> crate::error::Result<usize> {
+pub(crate) fn get_length_after_sjis_encode(utf8: &str) -> crate::error::Result<usize> {
     Ok(encode_to_sjis(utf8)?.len())
 }
 
-pub fn bcd_to_int(mut bcd: u16) -> u16 {
+pub(crate) fn bcd_to_int(mut bcd: u16) -> u16 {
     let mut value: u16 = 0;
     let mut nibble: u32 = 0;
     while bcd != 0 {
@@ -52,12 +58,12 @@ pub fn bcd_to_int(mut bcd: u16) -> u16 {
     value
 }
 
-pub fn parse_bcd_u8(buf: &[u8]) -> Result<u8, TryFromSliceError> {
+pub(crate) fn parse_bcd_u8(buf: &[u8]) -> Result<u8, TryFromSliceError> {
     let val = parse_u8(buf)?;
     Ok(bcd_to_int(val as u16) as u8)
 }
 
-pub fn parse_bcd_u16(buf: &[u8]) -> Result<u16, TryFromSliceError> {
+pub(crate) fn parse_bcd_u16(buf: &[u8]) -> Result<u16, TryFromSliceError> {
     let val = parse_u16(buf)?;
     Ok(bcd_to_int(val))
 }

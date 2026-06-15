@@ -1,3 +1,12 @@
+//! Track grouping: reading and rewriting the disc's group layout.
+//!
+//! NetMD encodes groups inside the disc title using a `0;//` syntax. This
+//! module parses that into [`RawTrackGroup`]s, exposes editing on a [`Disc`]
+//! ([`Disc::add_group`], [`Disc::rename_group`], [`Disc::remove_group`]), and
+//! compiles the result back into a title string written via
+//! [`NetMD::rewrite_disc_groups`]. Also provides title-space accounting
+//! ([`Disc::remaining_title_chars`], [`chars_to_cells`]).
+
 use log::debug;
 
 use crate::{
@@ -31,10 +40,10 @@ impl NetMD {
 
     /// Writes the disc's group structure back to the device. Mirrors
     /// `rewriteDiscGroups` (`netmd-commands.ts:365`). Both raw titles are written
-    /// through [`set_disc_title`], which sanitizes and length-prefixes them.
+    /// through [`NetMD::set_disc_title`], which sanitizes and length-prefixes them.
     pub fn rewrite_disc_groups(&self, disc: &Disc) -> Result<()> {
         debug!("rewrite disc groups");
-        let compiled = compile_disc_titles(disc);
+        let compiled = disc.compile_titles();
         self.set_disc_title(&compiled.raw_title, false)?;
         self.set_disc_title(&compiled.raw_full_width_title, true)?;
         Ok(())
@@ -131,16 +140,6 @@ fn parse_track_group_list(
     Ok(result)
 }
 
-#[must_use]
-pub fn count_tracks_in_disc(disc: &Disc) -> usize {
-    disc.groups.iter().map(|g| g.tracks.len()).sum()
-}
-
-#[must_use]
-pub fn tracks(disc: &Disc) -> Vec<&Track> {
-    disc.groups.iter().flat_map(|g| g.tracks.iter()).collect()
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TitleCells {
     pub half_width: usize,
@@ -168,148 +167,167 @@ fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
 
-#[must_use]
-pub fn cells_for_title(track: &Track) -> TitleCells {
-    let encoding_name_correction = if track.encoding == Encoding::Sp { 0 } else { 1 };
-    let full_width_length =
-        chars_to_cells(track.full_width_title.as_deref().map_or(0, utf16_len) * 2);
-    let half_width_length = chars_to_cells(get_half_width_title_length(
-        track.title.as_deref().unwrap_or(""),
-    ));
-    TitleCells {
-        half_width: encoding_name_correction.max(half_width_length),
-        full_width: encoding_name_correction.max(full_width_length),
-    }
-}
-
-#[must_use]
-pub fn remaining_characters_for_titles(disc: &Disc, include_groups: bool) -> RemainingChars {
-    const CELL_LIMIT: usize = 255;
-
-    let mut fw_title = format!("{}0;//", disc.full_width_title);
-    let mut hw_title = format!("{}0;//", disc.title);
-
-    if include_groups {
-        for group in disc.groups.iter().filter(|g| g.title.is_some()) {
-            let indices: Vec<u16> = group.tracks.iter().map(|t| t.index).collect();
-            let (min, max) = match (indices.iter().min(), indices.iter().max()) {
-                (Some(&lo), Some(&hi)) => (lo, hi),
-                _ => continue,
-            };
-            let range = if group.tracks.len() - 1 != 0 {
-                format!("{}-{}//", min + 1, max + 1)
-            } else {
-                format!("{}false//", min + 1)
-            };
-            fw_title.push_str(group.full_width_title.as_deref().unwrap_or(""));
-            fw_title.push_str(&range);
-            hw_title.push_str(group.title.as_deref().unwrap_or(""));
-            hw_title.push_str(&range);
+impl Track {
+    /// Number of TOC title cells this track's titles occupy. Mirrors the JS
+    /// `getCellsForTitle` accounting. LP tracks reserve at least one cell.
+    #[must_use]
+    pub fn title_cells(&self) -> TitleCells {
+        let encoding_name_correction = usize::from(self.encoding != Encoding::Sp);
+        let full_width_length =
+            chars_to_cells(self.full_width_title.as_deref().map_or(0, utf16_len) * 2);
+        let half_width_length = chars_to_cells(get_half_width_title_length(
+            self.title.as_deref().unwrap_or(""),
+        ));
+        TitleCells {
+            half_width: encoding_name_correction.max(half_width_length),
+            full_width: encoding_name_correction.max(full_width_length),
         }
-    }
-
-    let mut used_full = chars_to_cells(utf16_len(&fw_title) * 2);
-    let mut used_half = chars_to_cells(get_half_width_title_length(&hw_title));
-    for track in tracks(disc) {
-        let cells = cells_for_title(track);
-        used_half += cells.half_width;
-        used_full += cells.full_width;
-    }
-
-    RemainingChars {
-        half_width: CELL_LIMIT.saturating_sub(used_half) * 7,
-        full_width: CELL_LIMIT.saturating_sub(used_full) * 7,
-    }
-}
-
-#[must_use]
-pub fn compile_disc_titles(disc: &Disc) -> CompiledTitles {
-    let probe = Disc {
-        title: String::new(),
-        full_width_title: String::new(),
-        ..disc.clone()
-    };
-    let RemainingChars {
-        half_width: available_half,
-        full_width: available_full,
-    } = remaining_characters_for_titles(&probe, false);
-
-    let use_full_width = !disc.full_width_title.is_empty()
-        || disc.groups.iter().any(|g| {
-            g.full_width_title.as_deref().is_some_and(|t| !t.is_empty())
-                || g.tracks
-                    .iter()
-                    .any(|t| t.full_width_title.as_deref().is_some_and(|t| !t.is_empty()))
-        });
-
-    let mut new_raw_title = String::new();
-    let mut new_raw_full_title = String::new();
-    if !disc.title.is_empty() {
-        new_raw_title = format!("0;{}//", disc.title);
-    }
-    if use_full_width {
-        new_raw_full_title = format!("０；{}／／", disc.full_width_title);
-    }
-
-    let mut group_hits = 0;
-    for group in &disc.groups {
-        let Some(name) = group.title.as_deref() else {
-            continue;
-        };
-        if group.tracks.is_empty() {
-            continue;
-        }
-        group_hits += 1;
-        let min_index = group.tracks.iter().map(|t| t.index).min().unwrap_or(0);
-        let mut range = format!("{}", min_index + 1);
-        if group.tracks.len() != 1 {
-            range = format!("{range}-{}", min_index as usize + group.tracks.len());
-        }
-
-        let title_after = format!("{new_raw_title}{range};{name}//");
-        let full_title_after = format!(
-            "{new_raw_full_title}{}；{}／／",
-            half_width_to_full_width_range(&range),
-            group.full_width_title.as_deref().unwrap_or("")
-        );
-
-        let half_len_in_toc = chars_to_cells(get_half_width_title_length(&title_after)) * 7;
-        if use_full_width {
-            let full_len_in_toc = chars_to_cells(utf16_len(&full_title_after) * 2) * 7;
-            if available_full >= full_len_in_toc {
-                new_raw_full_title = full_title_after;
-            }
-        }
-        if available_half >= half_len_in_toc {
-            new_raw_title = title_after;
-        }
-    }
-
-    if group_hits == 0 {
-        new_raw_title = disc.title.clone();
-        new_raw_full_title = disc.full_width_title.clone();
-    }
-
-    let half_len_in_toc = chars_to_cells(get_half_width_title_length(&new_raw_title)) * 7;
-    let full_len_in_toc = chars_to_cells(utf16_len(&new_raw_full_title) * 2);
-    if available_half < half_len_in_toc {
-        new_raw_title = String::new();
-    }
-    if available_full < full_len_in_toc {
-        new_raw_full_title = String::new();
-    }
-
-    CompiledTitles {
-        raw_title: new_raw_title,
-        raw_full_width_title: if use_full_width {
-            new_raw_full_title
-        } else {
-            String::new()
-        },
     }
 }
 
 impl Disc {
+    /// Total number of tracks across all groups.
+    #[must_use]
+    pub fn total_track_count(&self) -> usize {
+        self.groups.iter().map(|g| g.tracks.len()).sum()
+    }
+
+    /// All tracks across all groups, in group order.
+    #[must_use]
+    pub fn tracks(&self) -> Vec<&Track> {
+        self.groups.iter().flat_map(|g| g.tracks.iter()).collect()
+    }
+
+    /// Remaining title characters (half- and full-width) before the TOC is full.
+    #[must_use]
+    pub fn remaining_title_chars(&self, include_groups: bool) -> RemainingChars {
+        const CELL_LIMIT: usize = 255;
+
+        let mut fw_title = format!("{}0;//", self.full_width_title);
+        let mut hw_title = format!("{}0;//", self.title);
+
+        if include_groups {
+            for group in self.groups.iter().filter(|g| g.title.is_some()) {
+                let indices: Vec<u16> = group.tracks.iter().map(|t| t.index).collect();
+                let (min, max) = match (indices.iter().min(), indices.iter().max()) {
+                    (Some(&lo), Some(&hi)) => (lo, hi),
+                    _ => continue,
+                };
+                let range = if group.tracks.len() - 1 != 0 {
+                    format!("{}-{}//", min + 1, max + 1)
+                } else {
+                    format!("{}false//", min + 1)
+                };
+                fw_title.push_str(group.full_width_title.as_deref().unwrap_or(""));
+                fw_title.push_str(&range);
+                hw_title.push_str(group.title.as_deref().unwrap_or(""));
+                hw_title.push_str(&range);
+            }
+        }
+
+        let mut used_full = chars_to_cells(utf16_len(&fw_title) * 2);
+        let mut used_half = chars_to_cells(get_half_width_title_length(&hw_title));
+        for track in self.tracks() {
+            let cells = track.title_cells();
+            used_half += cells.half_width;
+            used_full += cells.full_width;
+        }
+
+        RemainingChars {
+            half_width: CELL_LIMIT.saturating_sub(used_half) * 7,
+            full_width: CELL_LIMIT.saturating_sub(used_full) * 7,
+        }
+    }
+
+    /// Compiles the disc's group structure into the raw half- and full-width
+    /// title strings written back to the device.
+    #[must_use]
+    pub fn compile_titles(&self) -> CompiledTitles {
+        let probe = Disc {
+            title: String::new(),
+            full_width_title: String::new(),
+            ..self.clone()
+        };
+        let RemainingChars {
+            half_width: available_half,
+            full_width: available_full,
+        } = probe.remaining_title_chars(false);
+
+        let use_full_width = !self.full_width_title.is_empty()
+            || self.groups.iter().any(|g| {
+                g.full_width_title.as_deref().is_some_and(|t| !t.is_empty())
+                    || g.tracks
+                        .iter()
+                        .any(|t| t.full_width_title.as_deref().is_some_and(|t| !t.is_empty()))
+            });
+
+        let mut new_raw_title = String::new();
+        let mut new_raw_full_title = String::new();
+        if !self.title.is_empty() {
+            new_raw_title = format!("0;{}//", self.title);
+        }
+        if use_full_width {
+            new_raw_full_title = format!("０；{}／／", self.full_width_title);
+        }
+
+        let mut group_hits = 0;
+        for group in &self.groups {
+            let Some(name) = group.title.as_deref() else {
+                continue;
+            };
+            if group.tracks.is_empty() {
+                continue;
+            }
+            group_hits += 1;
+            let min_index = group.tracks.iter().map(|t| t.index).min().unwrap_or(0);
+            let mut range = format!("{}", min_index + 1);
+            if group.tracks.len() != 1 {
+                range = format!("{range}-{}", min_index as usize + group.tracks.len());
+            }
+
+            let title_after = format!("{new_raw_title}{range};{name}//");
+            let full_title_after = format!(
+                "{new_raw_full_title}{}；{}／／",
+                half_width_to_full_width_range(&range),
+                group.full_width_title.as_deref().unwrap_or("")
+            );
+
+            let half_len_in_toc = chars_to_cells(get_half_width_title_length(&title_after)) * 7;
+            if use_full_width {
+                let full_len_in_toc = chars_to_cells(utf16_len(&full_title_after) * 2) * 7;
+                if available_full >= full_len_in_toc {
+                    new_raw_full_title = full_title_after;
+                }
+            }
+            if available_half >= half_len_in_toc {
+                new_raw_title = title_after;
+            }
+        }
+
+        if group_hits == 0 {
+            new_raw_title.clone_from(&self.title);
+            new_raw_full_title.clone_from(&self.full_width_title);
+        }
+
+        let half_len_in_toc = chars_to_cells(get_half_width_title_length(&new_raw_title)) * 7;
+        let full_len_in_toc = chars_to_cells(utf16_len(&new_raw_full_title) * 2);
+        if available_half < half_len_in_toc {
+            new_raw_title = String::new();
+        }
+        if available_full < full_len_in_toc {
+            new_raw_full_title = String::new();
+        }
+
+        CompiledTitles {
+            raw_title: new_raw_title,
+            raw_full_width_title: if use_full_width {
+                new_raw_full_title
+            } else {
+                String::new()
+            },
+        }
+    }
+
     fn named_ranges(&self) -> Vec<(u16, u16, String, Option<String>)> {
         let mut ranges: Vec<(u16, u16, String, Option<String>)> = self
             .groups
@@ -547,10 +565,10 @@ mod tests {
 
     #[test]
     fn cells_for_title_reserves_a_cell_for_lp_tracks() {
-        assert_eq!(cells_for_title(&track(0, "", Encoding::Sp)).half_width, 0);
-        assert_eq!(cells_for_title(&track(0, "", Encoding::Lp2)).half_width, 1);
+        assert_eq!(track(0, "", Encoding::Sp).title_cells().half_width, 0);
+        assert_eq!(track(0, "", Encoding::Lp2).title_cells().half_width, 1);
         assert_eq!(
-            cells_for_title(&track(0, "12345678", Encoding::Sp)).half_width,
+            track(0, "12345678", Encoding::Sp).title_cells().half_width,
             2
         );
     }
@@ -572,7 +590,7 @@ mod tests {
             },
         ];
         let disc = disc_with("MyDisc", groups, 3);
-        let compiled = compile_disc_titles(&disc);
+        let compiled = disc.compile_titles();
         assert_eq!(compiled.raw_title, "0;MyDisc//1-2;First//3;Second//");
         assert_eq!(compiled.raw_full_width_title, "");
     }
@@ -589,7 +607,7 @@ mod tests {
             }],
             1,
         );
-        let compiled = compile_disc_titles(&disc);
+        let compiled = disc.compile_titles();
         assert_eq!(compiled.raw_title, "Plain");
     }
 

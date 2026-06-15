@@ -1,9 +1,16 @@
+//! Disc-level operations: title, flags, capacity, and subunit identifier.
+//!
+//! Reads and writes the disc (UTOC) title in both half-width and full-width
+//! tables, queries [`DiscFlags`], reports recordable capacity, and exposes the
+//! subunit identifier used to detect device quirks.
+
 use log::{debug, trace};
 
 use crate::{
     descriptor::{Descriptor, DescriptorAction},
     device::SHARP_VENDOR_ID,
     error::{NetMDError, Result},
+    query::QueryBuilder,
     scan::scan,
     title::{sanitize_full_width_title, sanitize_half_width_title},
     types::DiscFlags,
@@ -31,15 +38,17 @@ impl NetMD {
 
         let mut sink = vec![];
 
-        let w_char: u8 = if w_char { 1 } else { 0 };
+        let w_char: u8 = u8::from(w_char);
 
         debug!("get disk title");
 
         while done < total {
-            let query = format!(
-                "00 1806 02201801 00{:02x} 3000 0a00 ff00 {:04x}{:04x}",
-                w_char, remaining, done
-            );
+            let query = QueryBuilder::new()
+                .raw("00 1806 02201801 00")?
+                .u8(w_char)
+                .raw("3000 0a00 ff00")?
+                .u16(remaining)
+                .u16(done);
             let reply = self.send_query(query)?;
 
             if remaining == 0 {
@@ -97,9 +106,8 @@ impl NetMD {
         }
         let old_len = get_length_after_sjis_encode(&current_title)?;
         let new_len = get_length_after_sjis_encode(&title)?;
-        let wchar_value: u8 = if w_char { 1 } else { 0 };
+        let wchar_value: u8 = u8::from(w_char);
         let sjis = encode_to_sjis(&title)?;
-        let sjis_hex = sjis.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let flow = disc_title_write_flow(self.vendor_id);
 
         match flow {
@@ -115,10 +123,14 @@ impl NetMD {
             }
         }
 
-        let query = format!(
-            "00 1807 02201801 00{:02x} 3000 0a00 5000 {:04x} 0000 {:04x} {}",
-            wchar_value, new_len, old_len, sjis_hex
-        );
+        let query = QueryBuilder::new()
+            .raw("00 1807 02201801 00")?
+            .u8(wchar_value)
+            .raw("3000 0a00 5000")?
+            .u16(new_len as u16)
+            .raw("0000")?
+            .u16(old_len as u16)
+            .bytes(&sjis);
         let reply = self.send_query(query)?;
         reply.scan("%? 1807 02201801 00%? 3000 0a00 5000 %?%? 0000 %?%?")?;
 
@@ -153,7 +165,7 @@ impl NetMD {
     pub fn get_disc_flags(&self) -> Result<DiscFlags> {
         debug!("get disc flags");
         self.change_descriptor_state(Descriptor::RootTd, DescriptorAction::OpenRead)?;
-        let reply = self.send_query("00 1806 01101000 ff00 0001000b")?;
+        let reply = self.send_query(QueryBuilder::new().raw("00 1806 01101000 ff00 0001000b")?)?;
         let data = reply.scan("%? 1806 01101000 1000 0001000b %b")?;
         let flags = DiscFlags::from_bits(parse_u8(data[0])?);
         self.change_descriptor_state(Descriptor::RootTd, DescriptorAction::Close)?;
@@ -165,7 +177,8 @@ impl NetMD {
     pub fn get_disc_capacity(&self) -> Result<[[u32; 4]; 3]> {
         debug!("get disc capacity");
         self.change_descriptor_state(Descriptor::RootTd, DescriptorAction::OpenRead)?;
-        let reply = self.send_query("00 1806 02101000 3080 0300 ff00 00000000")?;
+        let reply =
+            self.send_query(QueryBuilder::new().raw("00 1806 02101000 3080 0300 ff00 00000000")?)?;
         let data = reply.scan(
             "%? 1806 02101000 3080 0300 1000 001d0000 001b %?03 0017 8000 \
              0005 %W %B %B %B 0005 %W %B %B %B 0005 %W %B %B %B",
@@ -192,7 +205,7 @@ impl NetMD {
             Descriptor::DiscSubUnitIdentifier,
             DescriptorAction::OpenRead,
         )?;
-        let reply = self.send_query("00 1809 00 ff00 0000 0000")?;
+        let reply = self.send_query(QueryBuilder::new().raw("00 1809 00 ff00 0000 0000")?)?;
         let data = reply.scan("%? 1809 00 1000 %?%? %?%? %w %b %b %b %b %w %*")?;
 
         let size_of_list_id = parse_u8(data[2])? as usize;

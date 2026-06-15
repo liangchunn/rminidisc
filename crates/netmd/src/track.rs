@@ -1,3 +1,10 @@
+//! Track upload via the secure download pipeline.
+//!
+//! Defines [`MdTrack`] (title plus a [`Wireformat`] payload) and the
+//! [`NetMD::download_track`] entry point that establishes a secure session,
+//! encrypts and streams the audio, and commits the new track. The `data` must
+//! already be in NetMD wire format (s16be PCM for SP, ATRAC3 frames for LP).
+
 use log::{debug, info, trace};
 
 use crate::crypto::{encrypt_packets, retailmac};
@@ -14,7 +21,7 @@ const CONTENT_ID: [u8; 20] = [
 
 const KEK: [u8; 8] = [0x14, 0xe3, 0x83, 0x4e, 0xe2, 0xd3, 0xcc, 0xa5];
 
-pub fn frame_size(format: Wireformat) -> usize {
+pub(crate) fn frame_size(format: Wireformat) -> usize {
     FRAME_SIZE
         .iter()
         .find(|(f, _)| *f == format)
@@ -22,7 +29,7 @@ pub fn frame_size(format: Wireformat) -> usize {
         .expect("unknown wire format")
 }
 
-pub fn disc_for_wire(format: Wireformat) -> DiscFormat {
+pub(crate) fn disc_for_wire(format: Wireformat) -> DiscFormat {
     match format {
         Wireformat::Pcm => DiscFormat::SpStereo,
         Wireformat::Lp2 => DiscFormat::Lp2,
