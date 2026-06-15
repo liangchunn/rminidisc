@@ -19,13 +19,13 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use log::{Level, LevelFilter};
+use netmd::{DeviceStatus, NetMD, PlaybackState};
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{Frame, Terminal};
-use netmd::{DeviceStatus, NetMD, PlaybackState};
 
 use crate::logbuf::{self, LevelControl, LogBuffer};
 

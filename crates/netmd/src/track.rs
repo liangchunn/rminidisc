@@ -1,7 +1,7 @@
 use log::{debug, info, trace};
 
 use crate::crypto::{encrypt_packets, retailmac};
-use crate::ekb::get_ekb_for_device;
+use crate::ekb::Ekb;
 use crate::error::Result;
 use crate::types::{DiscFormat, Wireformat, FRAME_SIZE};
 
@@ -75,7 +75,7 @@ impl NetMD {
 
         self.enter_secure_session()?;
         let leaf_id = self.get_leaf_id()?;
-        let ekb = get_ekb_for_device(&leaf_id, self.vendor_id, self.product_id);
+        let ekb = Ekb::get_ekb_for_device(&leaf_id, self.vendor_id, self.product_id);
         self.send_key_data(ekb.ekb_id, &ekb.key_chain, ekb.depth, &ekb.signature)?;
 
         let mut host_nonce = [0u8; 8];

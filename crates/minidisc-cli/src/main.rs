@@ -565,12 +565,7 @@ fn resolve_title(file: &str) -> String {
     }
 }
 
-fn upload_one(
-    netmd: &NetMD,
-    file: &str,
-    requested: &str,
-    title: &str,
-) -> anyhow::Result<()> {
+fn upload_one(netmd: &NetMD, file: &str, requested: &str, title: &str) -> anyhow::Result<()> {
     info!("preparing {file:?} as {}", requested);
     let (wireformat, data) = prepare_audio(file, requested)?;
     info!(
@@ -601,11 +596,7 @@ fn upload_one(
     Ok(())
 }
 
-fn upload_folder(
-    netmd: &NetMD,
-    folder: &str,
-    requested: &str,
-) -> anyhow::Result<()> {
+fn upload_folder(netmd: &NetMD, folder: &str, requested: &str) -> anyhow::Result<()> {
     let mut paths: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
         .with_context(|| format!("reading directory {folder:?}"))?
         .filter_map(|e| {
