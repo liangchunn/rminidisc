@@ -68,6 +68,9 @@ pub enum NetMDError {
     /// A bulk write returned success without advancing.
     #[error("NetMD: bulk write made no progress")]
     BulkWriteNoProgress,
+    /// An I/O error while reading the track payload during encryption/upload.
+    #[error("NetMD: I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl From<Infallible> for NetMDError {

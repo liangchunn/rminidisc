@@ -204,16 +204,12 @@ impl NetMD {
         discformat: u8,
         frames: u32,
         pkt_size: u32,
-        packets: &[EncryptedPacket],
+        packets: impl Iterator<Item = Result<EncryptedPacket>>,
         session_key: &[u8; 8],
         mut progress: Option<&mut dyn FnMut(u64, u64)>,
     ) -> Result<(u16, String, String)> {
         debug!("send track (wf=0x{wireformat:02x} df=0x{discformat:02x} frames={frames})");
-        info!(
-            "sending track: {} packets, {} total bytes",
-            packets.len(),
-            pkt_size + 24
-        );
+        info!("sending track: {} total bytes", pkt_size + 24);
         sleep(Duration::from_millis(200));
 
         let total_bytes: u64 = pkt_size as u64 + 24;
@@ -230,14 +226,18 @@ impl NetMD {
 
         sleep(Duration::from_millis(200));
 
+        // Stream packets to the bulk endpoint as they are encrypted, so neither
+        // the plaintext nor the ciphertext is ever fully buffered in memory.
         let mut written_bytes: u64 = 0;
-        let mut first_buf;
-        for (i, packet) in packets.iter().enumerate() {
+        let mut first_buf = Vec::new();
+        for (i, packet) in packets.enumerate() {
+            let packet = packet?;
             if let Some(cb) = progress.as_deref_mut() {
                 cb(written_bytes, total_bytes);
             }
             let binpack: &[u8] = if i == 0 {
-                first_buf = Vec::with_capacity(24 + packet.data.len());
+                first_buf.clear();
+                first_buf.reserve(24 + packet.data.len());
                 first_buf.extend_from_slice(&[0, 0, 0, 0]);
                 first_buf.extend_from_slice(&pkt_size.to_be_bytes());
                 first_buf.extend_from_slice(&packet.key);

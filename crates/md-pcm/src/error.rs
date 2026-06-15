@@ -62,4 +62,8 @@ pub enum Error {
     FinalizeWav(#[source] hound::Error),
     #[error("resample requires stereo input, got {0} channel(s)")]
     ResampleNotStereo(usize),
+    #[error("writing decoded audio output: {0}")]
+    WriteOutput(#[source] std::io::Error),
+    #[error("audio sink already finished")]
+    SinkAlreadyFinished,
 }

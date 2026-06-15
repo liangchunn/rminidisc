@@ -567,18 +567,18 @@ fn resolve_title(file: &str) -> String {
 
 fn upload_one(netmd: &NetMD, file: &str, requested: &str, title: &str) -> anyhow::Result<()> {
     info!("preparing {file:?} as {}", requested);
-    let (wireformat, data) = prepare_audio(file, requested)?;
+    let prepared = prepare_audio(file, requested)?;
     info!(
         "prepared {} bytes, wire format {:?}",
-        data.len(),
-        wireformat
+        prepared.source.len(),
+        prepared.wireformat
     );
 
     let track = MdTrack {
         title: title.to_string(),
         full_width_title: None,
-        format: wireformat,
-        data,
+        format: prepared.wireformat,
+        source: prepared.source,
     };
 
     let mut last_pct = u64::MAX;
@@ -675,31 +675,150 @@ fn cmd_upload(args: UploadArgs, device: Option<netmd::DeviceSelector>) -> anyhow
     result
 }
 
-/// Prepares audio for upload, returning the wire format and raw payload.
+/// Reads only the leading bytes of `path` and reports whether it is an ATRAC3
+/// WAV. Avoids loading large non-ATRAC3 files such as m4a fully into memory just
+/// to inspect their header. The RIFF `fmt ` chunk is well within the first few
+/// KiB for any real ATRAC3 WAV.
+///
+/// If the prefix is a RIFF/WAVE file whose `fmt ` chunk lies beyond the probed
+/// bytes (e.g. behind a large JUNK/LIST/metadata chunk), the probe is
+/// inconclusive and the caller must perform a full-file parse to be sure.
+fn is_atrac3_file(path: &str) -> anyhow::Result<bool> {
+    use std::io::Read;
+
+    const HEADER_PROBE_BYTES: usize = 8 * 1024;
+    let mut file = std::fs::File::open(path).with_context(|| format!("opening {path}"))?;
+    let mut header = vec![0u8; HEADER_PROBE_BYTES];
+    let mut filled = 0;
+    while filled < header.len() {
+        match file
+            .read(&mut header[filled..])
+            .with_context(|| format!("reading header of {path}"))?
+        {
+            0 => break,
+            n => filled += n,
+        }
+    }
+    header.truncate(filled);
+
+    match wav::atrac3_format(&header) {
+        wav::HeaderProbe::Found(fmt) => Ok(fmt.is_some()),
+        wav::HeaderProbe::NotWav => Ok(false),
+        // `fmt ` is past the prefix; fall back to a full parse. This re-reads the
+        // file, but only for genuine RIFF/WAVE inputs with an unusually large
+        // pre-`fmt ` chunk — not for the common m4a/large-non-WAV case.
+        wav::HeaderProbe::Inconclusive => {
+            let raw = std::fs::read(path).with_context(|| format!("reading {path}"))?;
+            Ok(wav::atrac3_info(&raw).is_some())
+        }
+    }
+}
+
+/// A temporary file that is removed from disk when dropped.
+struct TempFile {
+    path: std::path::PathBuf,
+}
+
+impl TempFile {
+    /// Creates a uniquely-named temp file in the system temp dir.
+    fn new(tag: &str) -> anyhow::Result<Self> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "minidisc_{tag}_{}_{nanos}.tmp",
+            std::process::id()
+        ));
+        Ok(Self { path })
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Prepares audio for upload, returning the wire format and a streamable
+/// payload source.
 ///
 /// - If the input is an ATRAC3 WAV, its payload is used directly (header
 ///   stripped) and the requested format is ignored (the file dictates it).
-/// - SP: normalize to big-endian s16 PCM via `md_pcm`.
-/// - LP2/LP105/LP4: normalize to a 44.1 kHz stereo WAV via `md_pcm`, encode
-///   as ATRAC3, then strip the resulting ATRAC3 WAV header.
-fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Vec<u8>)> {
-    let raw = std::fs::read(input).with_context(|| format!("reading {input}"))?;
+/// - SP: normalize to big-endian s16 PCM via `md_pcm`, streamed to a temp file.
+/// - LP2/LP105/LP4: normalize to a 44.1 kHz stereo WAV (temp file) via `md_pcm`,
+///   encode as ATRAC3, then strip the resulting ATRAC3 WAV header.
+///
+/// Result of preparing an input file for upload: the wire format and a
+/// streamable payload source, plus any temp files that must outlive the upload.
+struct PreparedAudio {
+    wireformat: Wireformat,
+    source: netmd::TrackSource,
+    /// Kept alive so the backing temp file (if any) is not deleted before the
+    /// upload reads it; dropped (and removed) when `PreparedAudio` is dropped.
+    _temp: Option<TempFile>,
+}
 
-    // Already ATRAC3? Use it directly.
-    if let Some((fmt, payload)) = wav::atrac3_info(&raw) {
+fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<PreparedAudio> {
+    // Cheaply probe the header first: a large non-ATRAC3 file (e.g. a 700MB
+    // m4a) should not be slurped into memory just to discover it is not an
+    // ATRAC3 WAV. The `fmt ` chunk lives near the start of the file.
+    if is_atrac3_file(input)? {
+        // Confirmed ATRAC3: read the whole file and use its payload directly.
+        let raw = std::fs::read(input).with_context(|| format!("reading {input}"))?;
+        let (fmt, payload) = wav::atrac3_info(&raw)
+            .context("file looked like ATRAC3 from its header but failed full parse")?;
         info!("input is ATRAC3 ({fmt:?}); using payload directly");
-        return Ok((fmt, payload.to_vec()));
+        return Ok(PreparedAudio {
+            wireformat: fmt,
+            source: netmd::TrackSource::Memory(payload.to_vec()),
+            _temp: None,
+        });
     }
 
     match requested {
         "sp" => {
-            let data = md_pcm::decode_to_s16be_44100_stereo(input)
-                .with_context(|| format!("normalizing {input} to 44.1 kHz stereo s16be"))?;
-            Ok((Wireformat::Pcm, data))
+            // Stream s16be PCM straight to a temp file. SP payloads are large
+            // (~10 MB/min) and are later stream-encrypted from disk, so the full
+            // PCM never needs to be resident in memory.
+            let pcm_tmp = TempFile::new("s16be")?;
+            let len = {
+                let file = std::fs::File::create(pcm_tmp.path()).with_context(|| {
+                    format!("creating temp PCM {}", pcm_tmp.path().display())
+                })?;
+                let mut writer = std::io::BufWriter::new(file);
+                md_pcm::decode_to_s16be_44100_stereo_writer(input, &mut writer)
+                    .with_context(|| format!("normalizing {input} to 44.1 kHz stereo s16be"))?;
+                std::io::Write::flush(&mut writer).ok();
+                std::fs::metadata(pcm_tmp.path())
+                    .with_context(|| format!("sizing temp PCM {}", pcm_tmp.path().display()))?
+                    .len() as usize
+            };
+            Ok(PreparedAudio {
+                wireformat: Wireformat::Pcm,
+                source: netmd::TrackSource::File {
+                    path: pcm_tmp.path().to_path_buf(),
+                    len,
+                },
+                _temp: Some(pcm_tmp),
+            })
         }
         "lp2" | "lp105" | "lp4" => {
-            let wav_data = md_pcm::decode_to_wav_44100_stereo(input)
-                .with_context(|| format!("normalizing {input} to 44.1 kHz stereo WAV"))?;
+            // Stream the normalized WAV straight to a temp file rather than
+            // buffering the whole (potentially gigabyte-scale) PCM in memory.
+            let wav_tmp = TempFile::new("wav")?;
+            {
+                let file = std::fs::File::create(wav_tmp.path())
+                    .with_context(|| format!("creating temp WAV {}", wav_tmp.path().display()))?;
+                let writer = std::io::BufWriter::new(file);
+                md_pcm::decode_to_wav_44100_stereo_writer(input, writer)
+                    .with_context(|| format!("normalizing {input} to 44.1 kHz stereo WAV"))?;
+            }
 
             // Encode to ATRAC3 (RIFF container) using the local atracdenc crate.
             let (codec, bitrate, wf) = match requested {
@@ -708,23 +827,31 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<(Wireformat, Ve
                 "lp4" => (atracdenc::Codec::Atrac3Lp4, 64, Wireformat::Lp4),
                 _ => unreachable!(),
             };
+            let wav_file = std::fs::File::open(wav_tmp.path())
+                .with_context(|| format!("reopening temp WAV {}", wav_tmp.path().display()))?;
             let encoded = atracdenc::EncodeBuilder::new()
                 .codec(codec)
                 .container(atracdenc::Container::Riff)
-                .input_bytes(wav_data)
+                .input_reader(std::io::BufReader::new(wav_file))
                 .at3_settings(atracdenc::At3Settings {
                     bitrate_kbps: Some(bitrate),
                     ..Default::default()
                 })
                 .run_to_vec()
                 .context("encoding ATRAC3 with atracdenc crate")?;
+            // The temp WAV is no longer needed once encoding is done.
+            drop(wav_tmp);
 
             let (detected, payload) = wav::atrac3_info(&encoded)
                 .context("ATRAC encoder output was not a recognizable ATRAC3 WAV")?;
             if detected != wf {
                 info!("note: ATRAC encoder produced {detected:?}, requested {wf:?}");
             }
-            Ok((detected, payload.to_vec()))
+            Ok(PreparedAudio {
+                wireformat: detected,
+                source: netmd::TrackSource::Memory(payload.to_vec()),
+                _temp: None,
+            })
         }
         other => bail!("unknown format {other:?} (expected sp, lp2, lp105, lp4)"),
     }

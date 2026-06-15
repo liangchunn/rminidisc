@@ -7,7 +7,7 @@
 
 use log::{debug, info, trace};
 
-use crate::crypto::{encrypt_packets, retailmac};
+use crate::crypto::{retailmac, PacketEncryptor};
 use crate::ekb::Ekb;
 use crate::error::Result;
 use crate::types::{DiscFormat, Wireformat, FRAME_SIZE};
@@ -38,17 +38,53 @@ pub(crate) fn disc_for_wire(format: Wireformat) -> DiscFormat {
     }
 }
 
+/// The wire-format payload for an upload, as a streamable source.
+///
+/// Large payloads (e.g. SP s16be PCM) can be backed by a file so they are never
+/// fully resident in memory; small payloads can stay in memory.
+pub enum TrackSource {
+    /// Payload held entirely in memory.
+    Memory(Vec<u8>),
+    /// Payload streamed from a file of `len` bytes.
+    File { path: std::path::PathBuf, len: usize },
+}
+
+impl TrackSource {
+    /// Length of the (unpadded) payload in bytes.
+    pub fn len(&self) -> usize {
+        match self {
+            TrackSource::Memory(data) => data.len(),
+            TrackSource::File { len, .. } => *len,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Opens the payload as a `Read`er borrowing from `self`.
+    fn open(&self) -> Result<Box<dyn std::io::Read + '_>> {
+        match self {
+            TrackSource::Memory(data) => Ok(Box::new(std::io::Cursor::new(data.as_slice()))),
+            TrackSource::File { path, .. } => {
+                let file = std::fs::File::open(path)?;
+                Ok(Box::new(std::io::BufReader::new(file)))
+            }
+        }
+    }
+}
+
 pub struct MdTrack {
     pub title: String,
     pub full_width_title: Option<String>,
     pub format: Wireformat,
-    pub data: Vec<u8>,
+    pub source: TrackSource,
 }
 
 impl MdTrack {
     pub fn total_size(&self) -> usize {
         let fs = frame_size(self.format);
-        let len = self.data.len();
+        let len = self.source.len();
         if !len.is_multiple_of(fs) {
             len + (fs - (len % fs))
         } else {
@@ -127,14 +163,18 @@ impl NetMD {
             "encrypting packets (frame_size={})",
             frame_size(track.format)
         );
-        let packets = encrypt_packets(&KEK, frame_size(track.format), &track.data);
+        // Stream-encrypt the payload one chunk at a time straight to the bulk
+        // endpoint; nothing is fully buffered in memory.
+        let reader = track.source.open()?;
+        let packets =
+            PacketEncryptor::new(&KEK, frame_size(track.format), track.source.len(), reader);
         trace!("sending encrypted track");
         let (track_num, uuid, ccid) = self.send_track(
             track.format as u8,
             disc_for_wire(track.format) as u8,
             track.frame_count(),
             track.total_size() as u32,
-            &packets,
+            packets,
             session_key,
             progress,
         )?;
@@ -160,7 +200,7 @@ mod tests {
             title: "t".into(),
             full_width_title: None,
             format: Wireformat::Lp4,
-            data: vec![0u8; 100],
+            source: TrackSource::Memory(vec![0u8; 100]),
         };
         assert_eq!(t.total_size(), 192);
         assert_eq!(t.frame_count(), 2);
@@ -172,7 +212,7 @@ mod tests {
             title: "t".into(),
             full_width_title: None,
             format: Wireformat::Pcm,
-            data: vec![0u8; 4096],
+            source: TrackSource::Memory(vec![0u8; 4096]),
         };
         assert_eq!(t.total_size(), 4096);
         assert_eq!(t.frame_count(), 2);

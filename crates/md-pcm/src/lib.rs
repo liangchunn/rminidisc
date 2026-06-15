@@ -11,6 +11,7 @@ pub mod error;
 pub(crate) mod output;
 pub(crate) mod resample;
 
+use std::io::{Seek, Write};
 use std::path::Path;
 
 use symphonia::core::formats::probe::Hint;
@@ -18,22 +19,54 @@ use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
-use crate::decoder::decode_to_44100_stereo;
+use crate::decoder::decode_to_44100_stereo_streaming;
 use crate::error::Result;
-use crate::output::{stereo_to_s16be, stereo_to_wav};
+use crate::output::{S16beSink, WavSink};
+
+/// Decode `path`, normalize it to stereo 44.1 kHz PCM, and stream interleaved
+/// signed 16-bit big-endian samples to `writer`.
+///
+/// Memory use is bounded by the decoder/resampler chunk sizes, not the track
+/// length: decoded audio is converted and written incrementally.
+pub fn decode_to_s16be_44100_stereo_writer<W: Write>(
+    path: impl AsRef<Path>,
+    writer: W,
+) -> Result<()> {
+    let mut sink = S16beSink::new(writer);
+    decode_to_44100_stereo_streaming(path.as_ref(), &mut sink)
+}
+
+/// Decode `path`, normalize it to stereo 44.1 kHz PCM, and stream a 16-bit PCM
+/// WAV file to `writer`. The writer must be seekable so the WAV header can be
+/// patched on finalize.
+pub fn decode_to_wav_44100_stereo_writer<W: Write + Seek>(
+    path: impl AsRef<Path>,
+    writer: W,
+) -> Result<()> {
+    let mut sink = WavSink::new(writer)?;
+    decode_to_44100_stereo_streaming(path.as_ref(), &mut sink)
+}
 
 /// Decode `path`, normalize it to stereo 44.1 kHz PCM, and return interleaved
 /// signed 16-bit big-endian samples.
+///
+/// Prefer [`decode_to_s16be_44100_stereo_writer`] for large inputs; this buffers
+/// the entire result in memory.
 pub fn decode_to_s16be_44100_stereo(path: impl AsRef<Path>) -> Result<Vec<u8>> {
-    let audio = decode_to_44100_stereo(path)?;
-    Ok(stereo_to_s16be(&audio.channels))
+    let mut out = Vec::new();
+    decode_to_s16be_44100_stereo_writer(path, &mut out)?;
+    Ok(out)
 }
 
 /// Decode `path`, normalize it to stereo 44.1 kHz PCM, and return a WAV file
 /// containing signed 16-bit little-endian PCM samples.
+///
+/// Prefer [`decode_to_wav_44100_stereo_writer`] for large inputs; this buffers
+/// the entire result in memory.
 pub fn decode_to_wav_44100_stereo(path: impl AsRef<Path>) -> Result<Vec<u8>> {
-    let audio = decode_to_44100_stereo(path)?;
-    stereo_to_wav(&audio.channels)
+    let mut out = Vec::new();
+    decode_to_wav_44100_stereo_writer(path, std::io::Cursor::new(&mut out))?;
+    Ok(out)
 }
 
 /// Lightweight check: returns `true` if symphonia can probe `path` as audio.
@@ -95,6 +128,34 @@ mod tests {
         assert_eq!(spec.bits_per_sample, 16);
         assert_eq!(spec.sample_format, hound::SampleFormat::Int);
         assert_eq!(reader.duration(), 2);
+    }
+
+    #[test]
+    fn streaming_resampler_matches_expected_length() {
+        // Multi-chunk input (well over RESAMPLE_CHUNK_FRAMES) at 48k -> 44.1k.
+        let frames = 48_000usize; // 1 second
+        let left: Vec<f32> = (0..frames)
+            .map(|i| (i as f32 * 0.001).sin())
+            .collect();
+        let right = left.clone();
+        let out = crate::resample::resample(vec![left, right], 48_000, 44_100).unwrap();
+        let expected = (44_100.0f64 / 48_000.0 * frames as f64).ceil() as usize;
+        assert_eq!(out[0].len(), expected);
+        assert_eq!(out[1].len(), expected);
+    }
+
+    #[test]
+    fn decode_to_writer_streams_without_buffering() {
+        // The writer-based API must produce identical bytes to the Vec API.
+        let path = temp_wav_path();
+        write_test_wav(&path, 48_000, 4800).unwrap();
+
+        let buffered = decode_to_s16be_44100_stereo(&path).unwrap();
+        let mut streamed = Vec::new();
+        decode_to_s16be_44100_stereo_writer(&path, &mut streamed).unwrap();
+        assert_eq!(buffered, streamed);
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

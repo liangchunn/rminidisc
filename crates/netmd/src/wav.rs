@@ -98,27 +98,114 @@ pub fn parse_wav(data: &[u8]) -> Result<WavInfo> {
     })
 }
 
-/// If `data` is a 2-channel 44.1 kHz ATRAC3 WAV, returns its wire format and the
-/// raw ATRAC3 payload (header stripped). Otherwise returns `None`.
+/// Selects the ATRAC3 wire format from a parsed `fmt ` chunk, or `None` if the
+/// chunk does not describe a 2-channel 44.1 kHz ATRAC3 stream.
 ///
 /// Mirrors `getAtrac3Info` (`utils.ts:475`): mode is selected from `byteRate`.
+fn atrac3_wireformat(fmt: &WavFmt) -> Option<Wireformat> {
+    if fmt.format_tag != WAVE_FORMAT_SONY_ATRAC3 || fmt.channels != 2 {
+        return None;
+    }
+    if fmt.sample_rate != 44100 {
+        return None;
+    }
+    if fmt.byte_rate > 16000 {
+        Some(Wireformat::Lp2)
+    } else if fmt.byte_rate > 13000 {
+        Some(Wireformat::L105kbps)
+    } else if fmt.byte_rate > 8000 {
+        Some(Wireformat::Lp4)
+    } else {
+        None
+    }
+}
+
+/// Header-only ATRAC3 detection. Parses just the `fmt ` chunk — which appears
+/// near the start of a RIFF/WAVE file — and returns the wire format if this is a
+/// 2-channel 44.1 kHz ATRAC3 WAV.
+///
+/// Unlike [`atrac3_info`], this does **not** require the `data` chunk body to be
+/// present, so it works on a truncated header prefix. Use it to cheaply probe a
+/// large file before deciding whether to read it in full.
+///
+/// Returns a [`HeaderProbe`] distinguishing a definitive answer (the `fmt `
+/// chunk was located within `header`) from an inconclusive one (the prefix is a
+/// RIFF/WAVE file but `fmt ` lies beyond the supplied bytes), so the caller can
+/// decide whether a full-file parse is warranted.
+pub fn atrac3_format(header: &[u8]) -> HeaderProbe {
+    match parse_wav_fmt(header) {
+        FmtProbe::NotRiff => HeaderProbe::NotWav,
+        FmtProbe::Found(fmt) => HeaderProbe::Found(atrac3_wireformat(&fmt)),
+        FmtProbe::Truncated => HeaderProbe::Inconclusive,
+    }
+}
+
+/// Outcome of a header-only ATRAC3 probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderProbe {
+    /// The prefix is not a RIFF/WAVE file; it cannot be an ATRAC3 WAV.
+    NotWav,
+    /// The `fmt ` chunk was found within the prefix. The payload is
+    /// `Some(format)` for ATRAC3 streams, `None` for any other WAV (e.g. PCM).
+    Found(Option<Wireformat>),
+    /// The prefix is RIFF/WAVE but `fmt ` lies beyond the supplied bytes, so a
+    /// full-file parse is needed to decide.
+    Inconclusive,
+}
+
+enum FmtProbe {
+    NotRiff,
+    Found(WavFmt),
+    Truncated,
+}
+
+/// Parses only the `fmt ` chunk from a RIFF/WAVE prefix.
+///
+/// Walks the chunk list like [`parse_wav`] but stops as soon as `fmt ` is found
+/// and does not require the `data` chunk (or any chunk body beyond `fmt `) to be
+/// fully present. Distinguishes "not a WAV", "fmt found", and "fmt is beyond
+/// the supplied prefix" so the caller can fall back to a full parse only when it
+/// could actually change the answer.
+fn parse_wav_fmt(data: &[u8]) -> FmtProbe {
+    if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+        return FmtProbe::NotRiff;
+    }
+    let mut pos = 12usize;
+    while pos + 8 <= data.len() {
+        let id = &data[pos..pos + 4];
+        let size = u32_le(data, pos + 4) as usize;
+        let body_start = pos + 8;
+        if id == b"fmt " {
+            // The fmt chunk header is here but its body may be cut off.
+            if size < 16 || body_start + 16 > data.len() {
+                return FmtProbe::Truncated;
+            }
+            let b = &data[body_start..];
+            return FmtProbe::Found(WavFmt {
+                format_tag: u16_le(b, 0),
+                channels: u16_le(b, 2),
+                sample_rate: u32_le(b, 4),
+                byte_rate: u32_le(b, 8),
+                block_align: u16_le(b, 14),
+            });
+        }
+        // Skip this chunk (word-aligned). Bail if it runs past the prefix.
+        let advance = size + (size & 1);
+        let next = match body_start.checked_add(advance) {
+            Some(n) if n > pos => n,
+            _ => return FmtProbe::Truncated,
+        };
+        pos = next;
+    }
+    // Ran out of prefix bytes before reaching `fmt `.
+    FmtProbe::Truncated
+}
+
+/// If `data` is a 2-channel 44.1 kHz ATRAC3 WAV, returns its wire format and the
+/// raw ATRAC3 payload (header stripped). Otherwise returns `None`.
 pub fn atrac3_info(data: &[u8]) -> Option<(Wireformat, &[u8])> {
     let info = parse_wav(data).ok()?;
-    if info.fmt.format_tag != WAVE_FORMAT_SONY_ATRAC3 || info.fmt.channels != 2 {
-        return None;
-    }
-    if info.fmt.sample_rate != 44100 {
-        return None;
-    }
-    let format = if info.fmt.byte_rate > 16000 {
-        Wireformat::Lp2
-    } else if info.fmt.byte_rate > 13000 {
-        Wireformat::L105kbps
-    } else if info.fmt.byte_rate > 8000 {
-        Wireformat::Lp4
-    } else {
-        return None;
-    };
+    let format = atrac3_wireformat(&info.fmt)?;
     let payload = &data[info.data_offset..info.data_offset + info.data_len];
     Some((format, payload))
 }
@@ -178,6 +265,66 @@ mod tests {
         wav[20] = 0x01;
         wav[21] = 0x00;
         assert!(atrac3_info(&wav).is_none());
+    }
+
+    #[test]
+    fn header_only_probe_detects_truncated_atrac3() {
+        // A full ATRAC3 WAV truncated to just past the fmt chunk (no data body)
+        // must still be detected by the header-only probe.
+        let wav = make_atrac3_wav(0x4099, &[0xAA; 1024]);
+        // Keep RIFF(12) + fmt header(8) + fmt body(16) + a few bytes of the
+        // data chunk header, but not the payload.
+        let header = &wav[..12 + 8 + 16 + 4];
+        assert_eq!(atrac3_format(header), HeaderProbe::Found(Some(Wireformat::Lp2)));
+        // The full parser cannot succeed on this truncated prefix.
+        assert!(atrac3_info(header).is_none());
+    }
+
+    #[test]
+    fn header_only_probe_rejects_non_riff() {
+        assert_eq!(atrac3_format(b"\x00\x00\x18ftypM4A "), HeaderProbe::NotWav);
+        assert_eq!(atrac3_format(&[]), HeaderProbe::NotWav);
+    }
+
+    #[test]
+    fn header_only_probe_found_non_atrac3_is_definitive() {
+        // A PCM WAV's fmt is in the prefix: definitively not ATRAC3, no fallback.
+        let mut wav = make_atrac3_wav(0x4099, &[0u8; 8]);
+        wav[20] = 0x01; // format tag -> PCM
+        wav[21] = 0x00;
+        assert_eq!(atrac3_format(&wav), HeaderProbe::Found(None));
+    }
+
+    #[test]
+    fn header_only_probe_inconclusive_when_fmt_past_prefix() {
+        // A large JUNK chunk before fmt pushes fmt beyond an 8 KiB prefix.
+        let mut v = Vec::new();
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(b"WAVE");
+        // JUNK chunk with a 9000-byte body.
+        v.extend_from_slice(b"JUNK");
+        v.extend_from_slice(&9000u32.to_le_bytes());
+        v.extend_from_slice(&vec![0u8; 9000]);
+        // fmt + ATRAC3 body + data, all past the 8 KiB mark.
+        v.extend_from_slice(b"fmt ");
+        v.extend_from_slice(&16u32.to_le_bytes());
+        v.extend_from_slice(&0x0270u16.to_le_bytes());
+        v.extend_from_slice(&2u16.to_le_bytes());
+        v.extend_from_slice(&44100u32.to_le_bytes());
+        v.extend_from_slice(&0x4099u32.to_le_bytes());
+        v.extend_from_slice(&0xC0u16.to_le_bytes());
+        v.extend_from_slice(&0u16.to_le_bytes());
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&4u32.to_le_bytes());
+        v.extend_from_slice(&[1, 2, 3, 4]);
+
+        // 8 KiB prefix: cannot see fmt -> inconclusive.
+        let prefix = &v[..8 * 1024];
+        assert_eq!(atrac3_format(prefix), HeaderProbe::Inconclusive);
+        // The full buffer parses successfully via the complete parser.
+        let (fmt, _) = atrac3_info(&v).unwrap();
+        assert_eq!(fmt, Wireformat::Lp2);
     }
 
     #[test]

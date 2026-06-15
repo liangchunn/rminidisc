@@ -102,7 +102,7 @@
 //! workspace handles decoding/resampling/encoding to produce that payload.
 //!
 //! ```no_run
-//! use netmd::{open_device, track::MdTrack, Result, Wireformat};
+//! use netmd::{open_device, track::{MdTrack, TrackSource}, Result, Wireformat};
 //!
 //! fn main() -> Result<()> {
 //!     let netmd = open_device()?;
@@ -110,7 +110,7 @@
 //!         title: "New Track".to_string(),
 //!         full_width_title: None,
 //!         format: Wireformat::Pcm,
-//!         data: std::fs::read("track.s16be.raw").unwrap(),
+//!         source: TrackSource::Memory(std::fs::read("track.s16be.raw").unwrap()),
 //!     };
 //!
 //!     let mut progress = |written: u64, total: u64| {
@@ -173,7 +173,7 @@ pub use device::{
 };
 pub use error::{NetMDError as Error, Result};
 pub use groups::{chars_to_cells, CompiledTitles, RawTrackGroup, RemainingChars, TitleCells};
-pub use track::MdTrack;
+pub use track::{MdTrack, TrackSource};
 pub use types::{
     ChannelCount, Channels, DeviceStatus, Disc, DiscFlag, DiscFlags, DiscFormat, Encoding,
     FullOperatingStatus, Group, OperatingStatus, PlaybackState, PlaybackTime, Track, TrackFlag,

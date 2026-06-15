@@ -11,36 +11,22 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
 use crate::error::{Error, Result};
+use crate::output::StereoSink;
+use crate::resample::StreamResampler;
 
 pub(crate) const TARGET_SAMPLE_RATE: u32 = 44_100;
 pub(crate) const TARGET_CHANNELS: usize = 2;
 pub(crate) const RESAMPLE_CHUNK_FRAMES: usize = 4096;
 
-#[derive(Debug, Clone)]
-pub(crate) struct DecodedAudio {
-    pub(crate) sample_rate: u32,
-    pub(crate) channels: Vec<Vec<f32>>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct NormalizedAudio {
-    pub(crate) channels: Vec<Vec<f32>>,
-}
-
-pub(crate) fn decode_to_44100_stereo(path: impl AsRef<Path>) -> Result<NormalizedAudio> {
-    let path = path.as_ref();
-    let decoded = decode_file(path)?;
-    let stereo = normalize_to_stereo(decoded.channels)?;
-    let channels = if decoded.sample_rate == TARGET_SAMPLE_RATE {
-        stereo
-    } else {
-        crate::resample::resample(stereo, decoded.sample_rate, TARGET_SAMPLE_RATE)?
-    };
-
-    Ok(NormalizedAudio { channels })
-}
-
-pub(crate) fn decode_file(path: &Path) -> Result<DecodedAudio> {
+/// Decodes `path` and streams normalized 44.1 kHz stereo frames to `sink`.
+///
+/// The decode → (optional) resample → output pipeline runs incrementally,
+/// one decoded packet at a time, so peak memory is bounded by the packet and
+/// resampler chunk sizes rather than the full track length.
+pub(crate) fn decode_to_44100_stereo_streaming(
+    path: &Path,
+    sink: &mut dyn StereoSink,
+) -> Result<()> {
     let file = File::open(path).map_err(|source| Error::OpenFile {
         path: path.display().to_string(),
         source,
@@ -78,8 +64,17 @@ pub(crate) fn decode_file(path: &Path) -> Result<DecodedAudio> {
         .make_audio_decoder(&codec_params, &AudioDecoderOptions::default())
         .map_err(Error::CreateDecoder)?;
 
-    let mut sample_rate = codec_params.sample_rate.ok_or(Error::MissingSampleRate)?;
-    let mut channels: Option<Vec<Vec<f32>>> = None;
+    // Require a declared sample rate up front (matches the old behaviour) even
+    // though the authoritative rate comes from the decoded packet spec.
+    let _ = codec_params.sample_rate.ok_or(Error::MissingSampleRate)?;
+
+    // The resampler is created lazily on the first decoded packet, once the
+    // true source rate and channel count are known.
+    let mut pipeline: Option<Pipeline> = None;
+    // Reusable planar scratch (one Vec per channel) and interleaved buffer.
+    let mut planar: Vec<Vec<f32>> = Vec::new();
+    let mut interleaved: Vec<f32> = Vec::new();
+    let mut produced_any = false;
 
     loop {
         let packet = match format.next_packet() {
@@ -103,53 +98,150 @@ pub(crate) fn decode_file(path: &Path) -> Result<DecodedAudio> {
             Err(err) => return Err(Error::DecodePacket(err)),
         };
 
+        if decoded.frames() == 0 {
+            continue;
+        }
+
         let spec = decoded.spec();
-        sample_rate = spec.rate();
         let channel_count = spec.channels().count();
         if channel_count == 0 {
             return Err(Error::NoChannels);
         }
+        let rate = spec.rate();
 
-        let channels = channels.get_or_insert_with(|| vec![Vec::new(); channel_count]);
-        if channels.len() != channel_count {
-            return Err(Error::ChannelCountChanged);
+        let pipeline = match pipeline.as_mut() {
+            Some(p) => {
+                if p.channel_count() != channel_count || p.source_rate() != rate {
+                    return Err(Error::ChannelCountChanged);
+                }
+                p
+            }
+            None => pipeline.insert(Pipeline::new(channel_count, rate)?),
+        };
+
+        // Decode into planar f32, normalize to interleaved stereo, push.
+        decode_into_planar(&decoded, channel_count, &mut planar)?;
+        normalize_interleave(&planar, channel_count, &mut interleaved)?;
+        if interleaved.is_empty() {
+            continue;
         }
-
-        append_f32_samples(&decoded, channels)?;
+        produced_any = true;
+        pipeline.push(&interleaved, sink)?;
     }
 
-    let channels = channels.ok_or(Error::NoDecodedSamples)?;
-    if channels.iter().all(Vec::is_empty) {
-        return Err(Error::NoDecodedSamples);
+    match pipeline {
+        Some(p) if produced_any => p.finish(sink),
+        _ => Err(Error::NoDecodedSamples),
     }
-
-    Ok(DecodedAudio {
-        sample_rate,
-        channels,
-    })
 }
 
-fn append_f32_samples(
-    decoded: &GenericAudioBufferRef<'_>,
-    channels: &mut [Vec<f32>],
-) -> Result<()> {
-    if decoded.frames() == 0 {
-        return Ok(());
+/// Either passes interleaved stereo straight through, or runs it through a
+/// streaming resampler, depending on whether the source matches the target
+/// rate.
+enum Pipeline {
+    Passthrough {
+        channel_count: usize,
+        source_rate: u32,
+    },
+    Resample {
+        channel_count: usize,
+        source_rate: u32,
+        resampler: Box<StreamResampler>,
+    },
+}
+
+impl Pipeline {
+    fn new(channel_count: usize, source_rate: u32) -> Result<Self> {
+        if source_rate == TARGET_SAMPLE_RATE {
+            Ok(Pipeline::Passthrough {
+                channel_count,
+                source_rate,
+            })
+        } else {
+            Ok(Pipeline::Resample {
+                channel_count,
+                source_rate,
+                resampler: Box::new(StreamResampler::new(source_rate, TARGET_SAMPLE_RATE)?),
+            })
+        }
     }
-    if decoded.spec().channels().count() != channels.len() {
+
+    fn push(&mut self, interleaved: &[f32], sink: &mut dyn StereoSink) -> Result<()> {
+        match self {
+            Pipeline::Passthrough { .. } => sink.write_interleaved(interleaved),
+            Pipeline::Resample { resampler, .. } => resampler.push(interleaved, sink),
+        }
+    }
+
+    fn finish(self, sink: &mut dyn StereoSink) -> Result<()> {
+        match self {
+            Pipeline::Passthrough { .. } => sink.finish(),
+            Pipeline::Resample { resampler, .. } => resampler.finish(sink),
+        }
+    }
+}
+
+impl Pipeline {
+    fn channel_count(&self) -> usize {
+        match self {
+            Pipeline::Passthrough { channel_count, .. }
+            | Pipeline::Resample { channel_count, .. } => *channel_count,
+        }
+    }
+
+    fn source_rate(&self) -> u32 {
+        match self {
+            Pipeline::Passthrough { source_rate, .. }
+            | Pipeline::Resample { source_rate, .. } => *source_rate,
+        }
+    }
+}
+
+fn decode_into_planar(
+    decoded: &GenericAudioBufferRef<'_>,
+    channel_count: usize,
+    planar: &mut Vec<Vec<f32>>,
+) -> Result<()> {
+    if decoded.spec().channels().count() != channel_count {
         return Err(Error::BufferChannelCountChanged);
     }
-
-    let mut planar = Vec::new();
-    decoded.copy_to_vecs_planar::<f32>(&mut planar);
-
-    for (out, samples) in channels.iter_mut().zip(planar) {
-        out.extend_from_slice(&samples);
-    }
-
+    planar.clear();
+    decoded.copy_to_vecs_planar::<f32>(planar);
     Ok(())
 }
 
+/// Converts planar channels to interleaved stereo (mono is duplicated). Rejects
+/// anything other than mono/stereo.
+fn normalize_interleave(
+    planar: &[Vec<f32>],
+    channel_count: usize,
+    interleaved: &mut Vec<f32>,
+) -> Result<()> {
+    interleaved.clear();
+    match channel_count {
+        0 => return Err(Error::NoChannels),
+        1 => {
+            let mono = &planar[0];
+            interleaved.reserve(mono.len() * TARGET_CHANNELS);
+            for &s in mono {
+                interleaved.push(s);
+                interleaved.push(s);
+            }
+        }
+        2 => {
+            let frames = planar[0].len().min(planar[1].len());
+            interleaved.reserve(frames * TARGET_CHANNELS);
+            for (&l, &r) in planar[0].iter().zip(planar[1].iter()).take(frames) {
+                interleaved.push(l);
+                interleaved.push(r);
+            }
+        }
+        count => return Err(Error::UnsupportedChannelCount(count)),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) fn normalize_to_stereo(channels: Vec<Vec<f32>>) -> Result<Vec<Vec<f32>>> {
     match channels.len() {
         0 => Err(Error::NoChannels),
