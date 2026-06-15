@@ -13,6 +13,11 @@ pub(crate) mod resample;
 
 use std::path::Path;
 
+use symphonia::core::formats::probe::Hint;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+
 use crate::decoder::decode_to_44100_stereo;
 use crate::error::Result;
 use crate::output::{stereo_to_s16be, stereo_to_wav};
@@ -29,6 +34,25 @@ pub fn decode_to_s16be_44100_stereo(path: impl AsRef<Path>) -> Result<Vec<u8>> {
 pub fn decode_to_wav_44100_stereo(path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let audio = decode_to_44100_stereo(path)?;
     stereo_to_wav(&audio.channels)
+}
+
+/// Lightweight check: returns `true` if symphonia can probe `path` as audio.
+/// Opens and probes the file but does not decode any audio frames.
+pub fn probe_audio(path: &Path) -> bool {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    symphonia::default::get_probe()
+        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
+        .is_ok()
 }
 
 #[cfg(test)]

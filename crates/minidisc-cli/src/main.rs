@@ -602,7 +602,7 @@ fn upload_folder(netmd: &NetMD, folder: &str, requested: &str) -> anyhow::Result
         .filter_map(|e| {
             let e = e.ok()?;
             let ft = e.file_type().ok()?;
-            if ft.is_file() {
+            if ft.is_file() && md_pcm::probe_audio(&e.path()) {
                 Some(e.path())
             } else {
                 None
