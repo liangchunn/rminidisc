@@ -175,8 +175,8 @@ fn event_loop(terminal: &mut Terminal<Backend>, app: &mut App) -> anyhow::Result
     loop {
         terminal.draw(|f| draw(f, app))?;
 
-        if event::poll(EVENT_POLL_TIMEOUT)? {
-            if let Event::Key(key) = event::read()? {
+        if event::poll(EVENT_POLL_TIMEOUT)?
+            && let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
@@ -209,7 +209,6 @@ fn event_loop(terminal: &mut Terminal<Backend>, app: &mut App) -> anyhow::Result
                 // After an action, refresh status promptly.
                 app.poll_status(true);
             }
-        }
 
         if app.last_status_poll.elapsed() >= app.current_poll_interval() {
             app.poll_status(false);
