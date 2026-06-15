@@ -191,8 +191,9 @@ impl Pipeline {
 
     fn source_rate(&self) -> u32 {
         match self {
-            Pipeline::Passthrough { source_rate, .. }
-            | Pipeline::Resample { source_rate, .. } => *source_rate,
+            Pipeline::Passthrough { source_rate, .. } | Pipeline::Resample { source_rate, .. } => {
+                *source_rate
+            }
         }
     }
 }

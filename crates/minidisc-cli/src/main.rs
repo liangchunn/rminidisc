@@ -17,6 +17,7 @@ use netmd::track::MdTrack;
 use netmd::wav;
 use netmd::NetMD;
 use netmd::Wireformat;
+use tempfile::NamedTempFile;
 
 /// NetMD MiniDisc command-line tool.
 ///
@@ -714,37 +715,6 @@ fn is_atrac3_file(path: &str) -> anyhow::Result<bool> {
     }
 }
 
-/// A temporary file that is removed from disk when dropped.
-struct TempFile {
-    path: std::path::PathBuf,
-}
-
-impl TempFile {
-    /// Creates a uniquely-named temp file in the system temp dir.
-    fn new(tag: &str) -> anyhow::Result<Self> {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir().join(format!(
-            "minidisc_{tag}_{}_{nanos}.tmp",
-            std::process::id()
-        ));
-        Ok(Self { path })
-    }
-
-    fn path(&self) -> &std::path::Path {
-        &self.path
-    }
-}
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
 /// Prepares audio for upload, returning the wire format and a streamable
 /// payload source.
 ///
@@ -761,7 +731,7 @@ struct PreparedAudio {
     source: netmd::TrackSource,
     /// Kept alive so the backing temp file (if any) is not deleted before the
     /// upload reads it; dropped (and removed) when `PreparedAudio` is dropped.
-    _temp: Option<TempFile>,
+    _temp: Option<NamedTempFile>,
 }
 
 fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<PreparedAudio> {
@@ -786,16 +756,17 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<PreparedAudio> 
             // Stream s16be PCM straight to a temp file. SP payloads are large
             // (~10 MB/min) and are later stream-encrypted from disk, so the full
             // PCM never needs to be resident in memory.
-            let pcm_tmp = TempFile::new("s16be")?;
+            let mut pcm_tmp =
+                NamedTempFile::with_prefix("minidisc_s16be_").context("creating temp PCM file")?;
             let len = {
-                let file = std::fs::File::create(pcm_tmp.path()).with_context(|| {
-                    format!("creating temp PCM {}", pcm_tmp.path().display())
-                })?;
-                let mut writer = std::io::BufWriter::new(file);
+                let mut writer = std::io::BufWriter::new(pcm_tmp.as_file_mut());
                 md_pcm::decode_to_s16be_44100_stereo_writer(input, &mut writer)
                     .with_context(|| format!("normalizing {input} to 44.1 kHz stereo s16be"))?;
                 std::io::Write::flush(&mut writer).ok();
-                std::fs::metadata(pcm_tmp.path())
+                drop(writer);
+                pcm_tmp
+                    .as_file()
+                    .metadata()
                     .with_context(|| format!("sizing temp PCM {}", pcm_tmp.path().display()))?
                     .len() as usize
             };
@@ -811,11 +782,10 @@ fn prepare_audio(input: &str, requested: &str) -> anyhow::Result<PreparedAudio> 
         "lp2" | "lp105" | "lp4" => {
             // Stream the normalized WAV straight to a temp file rather than
             // buffering the whole (potentially gigabyte-scale) PCM in memory.
-            let wav_tmp = TempFile::new("wav")?;
+            let mut wav_tmp =
+                NamedTempFile::with_prefix("minidisc_wav_").context("creating temp WAV file")?;
             {
-                let file = std::fs::File::create(wav_tmp.path())
-                    .with_context(|| format!("creating temp WAV {}", wav_tmp.path().display()))?;
-                let writer = std::io::BufWriter::new(file);
+                let writer = std::io::BufWriter::new(wav_tmp.as_file_mut());
                 md_pcm::decode_to_wav_44100_stereo_writer(input, writer)
                     .with_context(|| format!("normalizing {input} to 44.1 kHz stereo WAV"))?;
             }

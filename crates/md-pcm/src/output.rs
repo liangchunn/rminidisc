@@ -35,7 +35,8 @@ impl<W: Write> StereoSink for S16beSink<W> {
         self.buf.clear();
         self.buf.reserve(interleaved.len() * 2);
         for &sample in interleaved {
-            self.buf.extend_from_slice(&f32_to_i16(sample).to_be_bytes());
+            self.buf
+                .extend_from_slice(&f32_to_i16(sample).to_be_bytes());
         }
         self.writer.write_all(&self.buf).map_err(Error::WriteOutput)
     }

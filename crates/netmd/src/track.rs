@@ -46,7 +46,10 @@ pub enum TrackSource {
     /// Payload held entirely in memory.
     Memory(Vec<u8>),
     /// Payload streamed from a file of `len` bytes.
-    File { path: std::path::PathBuf, len: usize },
+    File {
+        path: std::path::PathBuf,
+        len: usize,
+    },
 }
 
 impl TrackSource {

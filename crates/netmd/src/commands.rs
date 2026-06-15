@@ -78,7 +78,8 @@ impl NetMD {
                 let protected = TrackFlag::from_byte(self.get_track_flags(track_index)?);
                 group.tracks.push(Track {
                     index: track_index,
-                    title: Some(self.get_track_title(track_index, false)?).filter(|s| !s.is_empty()),
+                    title: Some(self.get_track_title(track_index, false)?)
+                        .filter(|s| !s.is_empty()),
                     full_width_title: Some(self.get_track_title(track_index, true)?)
                         .filter(|s| !s.is_empty()),
                     duration_frames,

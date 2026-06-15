@@ -53,7 +53,11 @@ impl NetMD {
     /// - The reply is read; if the status byte is interim (`0x0f`) and
     ///   `accept_interim` is false, the read is retried with exponential backoff.
     /// - `0x08` maps to `NotImplemented`, `0x0a` to `Rejected`.
-    pub(crate) fn send_query_ext<M>(&self, message: M, accept_interim: bool) -> Result<ReadRequestData>
+    pub(crate) fn send_query_ext<M>(
+        &self,
+        message: M,
+        accept_interim: bool,
+    ) -> Result<ReadRequestData>
     where
         M: TryInto<Query>,
         NetMDError: From<M::Error>,
@@ -86,7 +90,11 @@ impl NetMD {
         let mut attempt: u32 = 0;
         while attempt < MAX_INTERIM_ATTEMPTS {
             let data = self.read_reply()?;
-            let status_byte = data.0.first().copied().ok_or(NetMDError::UnknownStatus(0))?;
+            let status_byte = data
+                .0
+                .first()
+                .copied()
+                .ok_or(NetMDError::UnknownStatus(0))?;
             let status: ProtocolReply = status_byte.into();
 
             match status {

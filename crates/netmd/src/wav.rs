@@ -275,7 +275,10 @@ mod tests {
         // Keep RIFF(12) + fmt header(8) + fmt body(16) + a few bytes of the
         // data chunk header, but not the payload.
         let header = &wav[..12 + 8 + 16 + 4];
-        assert_eq!(atrac3_format(header), HeaderProbe::Found(Some(Wireformat::Lp2)));
+        assert_eq!(
+            atrac3_format(header),
+            HeaderProbe::Found(Some(Wireformat::Lp2))
+        );
         // The full parser cannot succeed on this truncated prefix.
         assert!(atrac3_info(header).is_none());
     }

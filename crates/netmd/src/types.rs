@@ -313,7 +313,10 @@ pub struct Disc {
 pub(crate) struct ReadRequestData(pub(crate) Vec<u8>);
 
 impl ReadRequestData {
-    pub(crate) fn scan<'b, 'a: 'b>(&'a self, template: &'a str) -> crate::error::Result<Vec<&'b [u8]>> {
+    pub(crate) fn scan<'b, 'a: 'b>(
+        &'a self,
+        template: &'a str,
+    ) -> crate::error::Result<Vec<&'b [u8]>> {
         scan(template, &self.0)
     }
 }

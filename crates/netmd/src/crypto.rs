@@ -169,14 +169,18 @@ impl<R: Read> PacketEncryptor<R> {
         }
     }
 
-    fn from_parts(kek: &[u8; 8], frame_size: usize, data_len: usize, reader: R, raw_key: [u8; 8]) -> Self {
+    fn from_parts(
+        kek: &[u8; 8],
+        frame_size: usize,
+        data_len: usize,
+        reader: R,
+        raw_key: [u8; 8],
+    ) -> Self {
         // key = DES-ECB-decrypt(rawKey, KEK), first 8 bytes.
         let key_dec = des_ecb_decrypt(kek, &raw_key);
         let key: [u8; 8] = key_dec[0..8].try_into().unwrap();
         let pad_remaining = Self::padding_for(data_len, frame_size);
-        trace!(
-            "PacketEncryptor: frame_size={frame_size} data_len={data_len} pad={pad_remaining}"
-        );
+        trace!("PacketEncryptor: frame_size={frame_size} data_len={data_len} pad={pad_remaining}");
         Self {
             reader,
             raw_key,
@@ -253,8 +257,6 @@ impl<R: Read> Iterator for PacketEncryptor<R> {
         self.next_packet()
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {

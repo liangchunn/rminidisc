@@ -84,7 +84,12 @@ pub fn probe_audio(path: &Path) -> bool {
     }
 
     symphonia::default::get_probe()
-        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
         .is_ok()
 }
 
@@ -134,9 +139,7 @@ mod tests {
     fn streaming_resampler_matches_expected_length() {
         // Multi-chunk input (well over RESAMPLE_CHUNK_FRAMES) at 48k -> 44.1k.
         let frames = 48_000usize; // 1 second
-        let left: Vec<f32> = (0..frames)
-            .map(|i| (i as f32 * 0.001).sin())
-            .collect();
+        let left: Vec<f32> = (0..frames).map(|i| (i as f32 * 0.001).sin()).collect();
         let right = left.clone();
         let out = crate::resample::resample(vec![left, right], 48_000, 44_100).unwrap();
         let expected = (44_100.0f64 / 48_000.0 * frames as f64).ceil() as usize;
