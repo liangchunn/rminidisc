@@ -35,6 +35,7 @@ pub(crate) enum ProtocolReply {
     /// Any status byte not defined by the protocol. Carries the raw byte so the
     /// transport layer can surface it as [`crate::error::NetMDError::UnknownStatus`]
     /// instead of panicking on unexpected hardware/bus data.
+    #[allow(dead_code)] // raw byte retained for diagnostics even if unread
     Unknown(u8),
 }
 

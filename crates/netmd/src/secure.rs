@@ -185,6 +185,7 @@ impl NetMD {
     }
 
     /// Terminates the secure session lifecycle. Mirrors `terminate` (`netmd-interface.ts:909`).
+    #[allow(dead_code)] // ported command not yet wired into a CLI path
     pub(crate) fn terminate(&self) -> Result<()> {
         debug!("terminate");
         let query = QueryBuilder::new().raw(SECURE_PREFIX)?.raw("2a ff00")?;

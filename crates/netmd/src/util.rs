@@ -16,6 +16,7 @@ pub(crate) fn parse_u8(buf: &[u8]) -> Result<u8, TryFromSliceError> {
     <[u8; 1]>::try_from(buf).map(|b| b[0])
 }
 
+#[allow(dead_code)] // ported helper, kept for parity with netmd-js
 pub(crate) fn parse_u32(buf: &[u8]) -> Result<u32, TryFromSliceError> {
     Ok(u32::from_be_bytes(<[u8; 4]>::try_from(buf)?))
 }

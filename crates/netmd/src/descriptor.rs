@@ -18,6 +18,7 @@ pub(crate) enum Descriptor {
     DiskTitleTd,
     AudioUtoc1Td,
     AudioUtoc4Td,
+    #[allow(dead_code)] // ported descriptor not yet exercised by any command
     DsiTd,
     AudioContentsTd,
     RootTd,
