@@ -28,7 +28,8 @@ use tempfile::NamedTempFile;
     name = "rminidisc",
     about = "NetMD MiniDisc command-line tool",
     long_about = "Dump metadata, upload/erase/rename/reorder tracks, and control \
-                  playback on NetMD MiniDisc devices."
+                  playback on NetMD MiniDisc devices.",
+    arg_required_else_help = true
 )]
 struct Cli {
     /// NetMD device as VID:PID (e.g. 054c:0084)
@@ -41,12 +42,12 @@ struct Cli {
     device: Option<netmd::DeviceSelector>,
 
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Dump disc + track metadata (default when no command is given)
+    /// Dump disc + track metadata
     Info,
     /// Encode and write a track to the device
     Upload(UploadArgs),
@@ -96,7 +97,7 @@ enum Command {
     },
     /// Print a one-shot playback status snapshot
     Status,
-    /// List supported NetMD devices
+    /// List connected NetMD devices
     List,
     /// Launch the interactive playback TUI
     Control,
@@ -163,12 +164,12 @@ fn main() -> anyhow::Result<()> {
     // The interactive TUI installs its own in-memory logger (env_logger would
     // write to stderr and corrupt the full-screen UI). Every other command uses
     // the normal stderr logger.
-    if matches!(cli.command, Some(Command::Control)) {
+    if matches!(cli.command, Command::Control) {
         return tui::run(cli.device);
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    match cli.command.unwrap_or(Command::Info) {
+    match cli.command {
         Command::Info => cmd_info(cli.device),
         Command::Upload(args) => cmd_upload(args, cli.device),
         Command::Erase { target } => cmd_erase(target, cli.device),
