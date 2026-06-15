@@ -4,6 +4,8 @@ Pure Rust crates interfacing with NetMD devices via USB, including audio normali
 
 No `ffmpeg` or `atracdenc` install required.
 
+Tested and works with a Sony MZ-N505 on macOS and Windows.
+
 > [!WARNING]
 > The code in this repository are largely written and reviewed with the aid of AI LLMs, and verifying it with a real Sony MZ-N505 on macOS.
 >
@@ -34,7 +36,6 @@ rminidisc upload --help
 
 > [!NOTE]
 > Windows needs drivers to talk to NetMD devices.
-> 
 > Install them with [Zadig](https://zadig.akeo.ie/).
 
 ### Remote control
