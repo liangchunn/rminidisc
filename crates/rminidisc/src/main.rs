@@ -1,4 +1,4 @@
-//! `minidisc-cli` — thin runner over the `netmd` library.
+//! `rminidisc` — thin runner over the `netmd` library.
 //!
 //! Device interaction is delegated to the `netmd` crate; this binary only does
 //! argument parsing and host-side audio preparation (ffmpeg / ATRAC encoding).
@@ -25,7 +25,7 @@ use tempfile::NamedTempFile;
 /// on NetMD MiniDisc devices.
 #[derive(Parser)]
 #[command(
-    name = "minidisc-cli",
+    name = "rminidisc",
     about = "NetMD MiniDisc command-line tool",
     long_about = "Dump metadata, upload/erase/rename/reorder tracks, and control \
                   playback on NetMD MiniDisc devices."

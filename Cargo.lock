@@ -82,6 +82,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 [[package]]
 name = "atracdenc"
 version = "0.1.0"
+source = "git+https://github.com/liangchunn/atracdenc-rs?tag=v0.1.0#f54e85a3520d8ba9bee6865214209ce1e6fa8a98"
 dependencies = [
  "atracdenc-core",
  "log",
@@ -91,6 +92,7 @@ dependencies = [
 [[package]]
 name = "atracdenc-core"
 version = "0.1.0"
+source = "git+https://github.com/liangchunn/atracdenc-rs?tag=v0.1.0#f54e85a3520d8ba9bee6865214209ce1e6fa8a98"
 dependencies = [
  "hound",
  "log",
@@ -751,23 +753,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
-name = "minidisc-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "atracdenc",
- "clap",
- "crossterm",
- "env_logger",
- "lofty",
- "log",
- "md-pcm",
- "netmd",
- "ratatui",
- "tempfile",
-]
-
-[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1036,6 +1021,23 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "rminidisc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "atracdenc",
+ "clap",
+ "crossterm",
+ "env_logger",
+ "lofty",
+ "log",
+ "md-pcm",
+ "netmd",
+ "ratatui",
+ "tempfile",
+]
 
 [[package]]
 name = "rubato"

@@ -1,13 +1,14 @@
 # AGENTS.md
 
 Rust workspace (resolver 3) for talking to Sony/Sharp NetMD MiniDisc devices over USB.
-Three crates under `crates/`: `netmd` (protocol lib), `md-pcm` (decode/resample/normalize), `minidisc-cli` (binary).
+Three crates under `crates/`: `netmd` (protocol lib), `md-pcm` (decode/resample/normalize), `rminidisc` (binary).
 
 ## Build / test gotchas
 
-- Use `cargo build -p minidisc-cli` / `cargo run -p minidisc-cli -- <args>` for the binary.
+- Use `cargo build -p rminidisc` / `cargo run -p rminidisc -- <args>` for the binary.
 - Run all tests: `cargo test` (unit tests are inline in `crates/*/src/*.rs`; they are parser/scan/crypto tests and need **no** hardware). Single crate: `cargo test -p netmd`.
 - Actually exercising device commands requires a real USB NetMD recorder; there is no hardware mock.
+- `rminidisc` depends on `atracdenc` via a **git dependency** (`github.com/liangchunn/atracdenc-rs`, tag `v0.1.0`), not crates.io; the first build fetches it. It is the external ATRAC3 encoder used by the LP2/LP4 upload path.
 
 ## Reference ports (gitignored, not part of the build)
 
@@ -15,19 +16,17 @@ Three crates under `crates/`: `netmd` (protocol lib), `md-pcm` (decode/resample/
 
 ## Porting workflow
 
-This repo is a line-by-line port of `netmd-js`. `PORTING_REFERENCE.md` is the authoritative map. Key rules when porting a command from JS:
+This repo is a line-by-line port of `netmd-js`. `docs/PORTING_REFERENCE.md` is the authoritative map. Key rules when porting a command from JS:
 
 - Rust hex query strings include the leading `00` status byte; JS prepends it at send time. Add `00 ` to JS query strings.
 - Rust `scan` templates start with `%?` to consume the status byte the JS reply strips. Add `%? ` to JS scan templates.
-- Always open the relevant descriptor TD before a read and close it after (see PORTING_REFERENCE.md table). Double-check the close descriptor.
+- Always open the relevant descriptor TD before a read and close it after (see `docs/PORTING_REFERENCE.md` table). Double-check the close descriptor.
 - `OperatingStatusBlock` descriptor is `80 00`, not `00 00`.
 
-`UNPORTED.md` / `TODO.md` / `CORE_TODO.md` track remaining work.
+`docs/UNPORTED.md` / `docs/TODO.md` / `docs/CORE_TODO.md` track remaining work.
 
 ## Architecture notes
 
-- `netmd/src/lib.rs` is a thin facade re-exporting from protocol-area modules (`disc`, `track_info`, `playback`, `secure`, `groups`, `transport`, etc.). Add new APIs in the relevant module and re-export there.
-- USB I/O lives in `transport.rs` (`send_query`, `read_reply*`); reply parsing uses the `scan`/`query` template language documented in PORTING_REFERENCE.md, with helpers in `util.rs`.
+- `netmd/src/lib.rs` is the facade: protocol-area modules (`disc`, `track_info`, `playback`, `secure`, `transport`, `commands`, `descriptor`, ...) are `pub(crate)` and add their commands as `impl NetMD` methods; lib.rs only re-exports public types and entry points (`device`, `track`, `types`, `groups`, `wav`, `error` are `pub`). Add new commands as methods in the relevant module; re-export new public types in lib.rs.
+- USB I/O lives in `transport.rs` (`send_query`, `read_reply*`); reply parsing uses the `scan`/`query` template language documented in `docs/PORTING_REFERENCE.md`, with helpers in `util.rs`.
 - Audio upload path (`md-pcm`): non-ATRAC3 input is decoded with `symphonia`, resampled to 44.1 kHz stereo with `rubato`; SP -> s16be PCM, LP2/LP4 -> WAV then encoded via the external `atracdenc` crate. ATRAC3 `.wav` files upload directly without transcoding.
-</content>
-</invoke>

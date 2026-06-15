@@ -1,10 +1,10 @@
 [package]
-name = "minidisc-cli"
+name = "rminidisc"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "minidisc-cli"
+name = "rminidisc"
 path = "src/main.rs"
 
 [dependencies]
@@ -17,5 +17,5 @@ ratatui = "0.29.0"
 crossterm = "0.28.1"
 lofty = "0.24.0"
 clap = { version = "4", features = ["derive"] }
-atracdenc = { path = "../../../atracdenc-codex/crates/atracdenc" }
+atracdenc = { git = "https://github.com/liangchunn/atracdenc-rs", tag = "v0.1.0" }
 tempfile = "3.23.0"

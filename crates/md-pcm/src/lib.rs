@@ -1,4 +1,4 @@
-//! Audio decoding and normalization used by the `minidisc-cli` upload command.
+//! Audio decoding and normalization used by the `rminidisc` upload command.
 //!
 //! This crate intentionally knows nothing about MiniDisc wire formats or ATRAC
 //! encoding. It only replaces the old FFmpeg normalization steps:
